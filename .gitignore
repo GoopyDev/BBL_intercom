@@ -1,0 +1,7 @@
+# Ignorar archivos y carpetas generados o no parte del proyecto
+__pycache__/
+*.py[cod]
+.vscode/
+assets/
+build/
+dist/
