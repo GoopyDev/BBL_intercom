@@ -1,7 +1,37 @@
-# Ignorar archivos y carpetas generados o no parte del proyecto
+# Python: caches, bytecode and local environments
 __pycache__/
 *.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+
+# Local editor/OS files
 .vscode/
-assets/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local secrets/configuration
+.env
+.env.*
+!.env.example
+
+# Test/coverage/type-check caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# PyInstaller outputs
 build/
 dist/
+
+# Local/raw design assets. Runtime assets live in res/ and must stay tracked.
+assets/
+
+# Runtime logs/temp files
+*.log
+*.tmp
