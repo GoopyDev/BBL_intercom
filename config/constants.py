@@ -101,7 +101,7 @@ TEMAS_PREDEFINIDOS = [
             ("#14B8A6", "#0F766E", "#FFFFFF"),
             ("#19C175", "#0B8051", "#FFFFFF"),
             ("#22C55E", "#15803D", "#FFFFFF"),
-            ("#84CC16", "#4D7C0F", "#1F2933")
+            ("#84CC16", "#4D7C0F", "#FFFFFF")
         ])
     },
     {
@@ -110,7 +110,7 @@ TEMAS_PREDEFINIDOS = [
         "colores": _tema_colores([
             ("#EF4444", "#991B1B", "#FFFFFF"),
             ("#F97316", "#9A3412", "#FFFFFF"),
-            ("#EAB308", "#854D0E", "#1F2933"),
+            ("#EAB308", "#854D0E", "#FFFFFF"),
             ("#A855F7", "#6B21A8", "#FFFFFF"),
             ("#EC4899", "#9D174D", "#FFFFFF"),
             ("#10B981", "#047857", "#FFFFFF")

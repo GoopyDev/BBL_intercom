@@ -76,7 +76,7 @@ class ITMessenger(ctk.CTk):
     def setup_ui(self):
         """Configura la ventana y decide entre registro o pantalla principal."""
         self.title(f"IT Messenger - {self.hostname}")
-        self.geometry("850x600")
+        self.geometry("850x850")
         self.aplicar_modo_apariencia()
         self.aplicar_icono()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
