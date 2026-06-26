@@ -60,6 +60,13 @@ class ITMessenger(ctk.CTk):
         self.reinicio_bg_image = None
         self.reinicio_bg_pil_image = None
         self.ruta_log_reinicio = os.path.join(os.path.dirname(self.ruta_config), "IT_Messenger_Config.log")
+        self.ventana_config = {}
+        self.ultima_geometria_normal = {
+            "x": 100,
+            "y": 100,
+            "width": 850,
+            "height": 850
+        }
 
         self.guardar_ruta_ejecucion_actual()
         self.cargar_config()
@@ -136,16 +143,20 @@ class ITMessenger(ctk.CTk):
                 if isinstance(tema, dict):
                     self.tema_tipo = tema.get("tipo", self.tema_tipo)
                     self.tema_id = tema.get("id", self.tema_id)
+                ventana = data.get("ventana", {})
+                if isinstance(ventana, dict):
+                    self.ventana_config = ventana
             self.actualizar_profile_equipo()
             self.iniciar_escucha()
 
     def setup_ui(self):
         """Configura la ventana y decide entre registro o pantalla principal."""
         self.title(f"IT Messenger - {self.hostname}")
-        self.geometry("850x850")
+        self.restaurar_geometria_ventana()
         self.aplicar_modo_apariencia()
         self.aplicar_icono()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.bind("<Configure>", self.actualizar_geometria_ventana)
 
         if not self.ruta_teams:
             self.mostrar_registro()
@@ -158,6 +169,227 @@ class ITMessenger(ctk.CTk):
             self.iconbitmap(resource_path(APP_ICON))
         except Exception as e:
             print(f"No se pudo cargar el icono de la aplicacion: {e}")
+
+    def obtener_monitores(self):
+        """Devuelve bounds/workarea de los monitores actuales usando la API de Windows."""
+        monitores = []
+
+        try:
+            class RECT(ctypes.Structure):
+                _fields_ = [
+                    ("left", ctypes.c_long),
+                    ("top", ctypes.c_long),
+                    ("right", ctypes.c_long),
+                    ("bottom", ctypes.c_long)
+                ]
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", ctypes.c_ulong),
+                    ("rcMonitor", RECT),
+                    ("rcWork", RECT),
+                    ("dwFlags", ctypes.c_ulong)
+                ]
+
+            def rect_a_tuple(rect):
+                return (rect.left, rect.top, rect.right, rect.bottom)
+
+            def callback(hmonitor, hdc, rect, data):
+                info = MONITORINFO()
+                info.cbSize = ctypes.sizeof(MONITORINFO)
+                if ctypes.windll.user32.GetMonitorInfoW(hmonitor, ctypes.byref(info)):
+                    monitores.append({
+                        "bounds": rect_a_tuple(info.rcMonitor),
+                        "work": rect_a_tuple(info.rcWork),
+                        "primary": bool(info.dwFlags & 1)
+                    })
+                return True
+
+            monitor_enum_proc = ctypes.WINFUNCTYPE(
+                ctypes.c_bool,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.POINTER(RECT),
+                ctypes.c_void_p
+            )
+            ctypes.windll.user32.EnumDisplayMonitors(0, 0, monitor_enum_proc(callback), 0)
+        except Exception:
+            monitores = []
+
+        if not monitores:
+            monitores.append({
+                "bounds": (0, 0, self.winfo_screenwidth(), self.winfo_screenheight()),
+                "work": (0, 0, self.winfo_screenwidth(), self.winfo_screenheight()),
+                "primary": True
+            })
+
+        return monitores
+
+    def obtener_monitor_principal(self, monitores):
+        for monitor in monitores:
+            if monitor.get("primary"):
+                return monitor
+        return monitores[0]
+
+    def obtener_monitor_de_geometria(self, x, y, width, height, monitores):
+        mejor_monitor = None
+        mejor_area = 0
+
+        for monitor in monitores:
+            left, top, right, bottom = monitor["bounds"]
+            inter_width = max(min(x + width, right) - max(x, left), 0)
+            inter_height = max(min(y + height, bottom) - max(y, top), 0)
+            area = inter_width * inter_height
+            if area > mejor_area:
+                mejor_area = area
+                mejor_monitor = monitor
+
+        return mejor_monitor or self.obtener_monitor_principal(monitores)
+
+    def geometria_intersecta_monitor(self, x, y, width, height, monitor):
+        left, top, right, bottom = monitor["bounds"]
+        inter_width = min(x + width, right) - max(x, left)
+        inter_height = min(y + height, bottom) - max(y, top)
+        return inter_width >= 80 and inter_height >= 80
+
+    def obtener_entero_config(self, cfg, clave, minimo=None):
+        try:
+            numero = int(cfg.get(clave))
+        except (TypeError, ValueError):
+            return None
+
+        if minimo is not None and numero < minimo:
+            return None
+
+        return numero
+
+    def ajustar_geometria_a_monitor(self, x, y, width, height, monitor):
+        left, top, right, bottom = monitor["work"]
+        work_width = max(right - left, 500)
+        work_height = max(bottom - top, 400)
+
+        width = min(max(width, 500), work_width)
+        height = min(max(height, 400), work_height)
+        x = min(max(x, left), right - width)
+        y = min(max(y, top), bottom - height)
+
+        return x, y, width, height
+
+    def obtener_geometria_segura(self):
+        cfg = self.ventana_config if isinstance(self.ventana_config, dict) else {}
+        monitores = self.obtener_monitores()
+        principal = self.obtener_monitor_principal(monitores)
+
+        width = self.obtener_entero_config(cfg, "width", 500)
+        height = self.obtener_entero_config(cfg, "height", 400)
+        x = self.obtener_entero_config(cfg, "x")
+        y = self.obtener_entero_config(cfg, "y")
+
+        if width is None or height is None:
+            width = 850
+            height = 850
+
+        if x is None or y is None:
+            left, top, right, bottom = principal["work"]
+            work_width = max(right - left, 500)
+            work_height = max(bottom - top, 400)
+            width = min(width, work_width)
+            height = min(height, work_height)
+            x = left + max((work_width - width) // 2, 0)
+            y = top + max((work_height - height) // 2, 0)
+            return x, y, width, height
+
+        monitor_guardado = self.obtener_monitor_de_geometria(x, y, width, height, monitores)
+        if self.geometria_intersecta_monitor(x, y, width, height, monitor_guardado):
+            return self.ajustar_geometria_a_monitor(x, y, width, height, monitor_guardado)
+
+        left, top, right, bottom = principal["work"]
+        work_width = max(right - left, 500)
+        work_height = max(bottom - top, 400)
+        width = min(width, work_width)
+        height = min(height, work_height)
+        x = left + max((work_width - width) // 2, 0)
+        y = top + max((work_height - height) // 2, 0)
+        return x, y, width, height
+
+    def restaurar_geometria_ventana(self):
+        x, y, width, height = self.obtener_geometria_segura()
+        self.ultima_geometria_normal = {
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height
+        }
+        self.geometry(f"{width}x{height}+{x}+{y}")
+
+        if self.ventana_config.get("state") == "zoomed":
+            self.after(100, lambda: self.state("zoomed"))
+
+    def actualizar_geometria_ventana(self, event=None):
+        if event is not None and event.widget is not self:
+            return
+
+        try:
+            if self.state() != "normal":
+                return
+        except Exception:
+            return
+
+        width = self.winfo_width()
+        height = self.winfo_height()
+        if width < 500 or height < 400:
+            return
+
+        self.ultima_geometria_normal = {
+            "x": self.winfo_x(),
+            "y": self.winfo_y(),
+            "width": width,
+            "height": height
+        }
+
+    def obtener_config_ventana_actual(self):
+        try:
+            self.update_idletasks()
+            estado = self.state()
+        except Exception:
+            estado = "normal"
+
+        if estado == "normal":
+            self.actualizar_geometria_ventana()
+
+        geometria = dict(self.ultima_geometria_normal)
+
+        if estado == "zoomed":
+            monitores = self.obtener_monitores()
+            monitor_actual = self.obtener_monitor_de_geometria(
+                self.winfo_x(),
+                self.winfo_y(),
+                self.winfo_width(),
+                self.winfo_height(),
+                monitores
+            )
+
+            if not self.geometria_intersecta_monitor(
+                geometria["x"],
+                geometria["y"],
+                geometria["width"],
+                geometria["height"],
+                monitor_actual
+            ):
+                left, top, right, bottom = monitor_actual["work"]
+                work_width = max(right - left, 500)
+                work_height = max(bottom - top, 400)
+                width = min(geometria["width"], work_width)
+                height = min(geometria["height"], work_height)
+                geometria.update({
+                    "x": left + max((work_width - width) // 2, 0),
+                    "y": top + max((work_height - height) // 2, 0),
+                    "width": width,
+                    "height": height
+                })
+
+        geometria["state"] = "zoomed" if estado == "zoomed" else "normal"
+        return geometria
 
     def mostrar_registro(self):
         """Muestra la pantalla de vinculacion inicial."""
@@ -223,7 +455,8 @@ class ITMessenger(ctk.CTk):
                 "tema": {
                     "tipo": self.tema_tipo,
                     "id": self.tema_id
-                }
+                },
+                "ventana": self.obtener_config_ventana_actual()
             }, f)
 
     def obtener_ruta_acceso_inicio_windows(self):
@@ -986,83 +1219,6 @@ class ITMessenger(ctk.CTk):
             lambda: self.ejecutar_reinicio_limpio(executable_path)
         )
 
-    # def mostrar_modal_reinicio(self):
-    #     """Muestra una ventana modal de reinicio con imagen de fondo y barra indeterminada."""
-    #     self.registrar_log_reinicio("[reinicio] mostrar_modal_reinicio iniciado")
-    #     if self.reinicio_modal is not None:
-    #         try:
-    #             self.reinicio_modal.destroy()
-    #         except Exception:
-    #             pass
-
-    #     self.reinicio_modal = ctk.CTkToplevel(self)
-    #     self.reinicio_modal.title("🔄 Reiniciando...")
-    #     self.reinicio_modal.resizable(False, False)
-    #     self.reinicio_modal.transient(self)
-
-    #     ancho = 580
-    #     alto = 280
-    #     self.reinicio_modal.geometry(f"{ancho}x{alto}")
-    #     self.centrar_ventana(self.reinicio_modal, ancho, alto)
-
-    #     try:
-    #         from PIL import ImageTk
-    #         imagen_path = resource_path(os.path.join("res", "restart.png"))
-    #         self.reinicio_bg_pil_image = Image.open(imagen_path)
-    #         self.reinicio_bg_image = ctk.CTkImage(
-    #             light_image=self.reinicio_bg_pil_image,
-    #             dark_image=self.reinicio_bg_pil_image,
-    #             size=(ancho, alto)
-    #         )
-    #         # Q3: ícono de ventana desde restart.png, con delay para sobrevivir al init de CTkToplevel
-    #         icon_img = self.reinicio_bg_pil_image.copy().resize((32, 32), Image.Resampling.LANCZOS)
-    #         self._reinicio_icon_photo = ImageTk.PhotoImage(icon_img)  # referencia en self para evitar GC
-
-    #         def _aplicar_icono():
-    #             try:
-    #                 if self.reinicio_modal and self.reinicio_modal.winfo_exists():
-    #                     self.reinicio_modal.wm_iconphoto(False, self._reinicio_icon_photo)
-    #             except Exception:
-    #                 pass
-
-    #         self.reinicio_modal.after(200, _aplicar_icono)
-    #     except Exception as e:
-    #         self.reinicio_bg_image = None
-    #         print(f"No se pudo cargar restart.png: {e}")
-
-    #     # Q2: imagen de fondo en su propio label, sin texto
-    #     bg_label = ctk.CTkLabel(
-    #         self.reinicio_modal,
-    #         image=self.reinicio_bg_image,
-    #         text=""
-    #     )
-    #     bg_label.place(x=0, y=0, relwidth=1, relheight=1)
-
-    #     # Q1 + Q2: texto blanco sobre banda oscura para contraste con la imagen
-    #     texto_frame = ctk.CTkFrame(
-    #         self.reinicio_modal,
-    #         fg_color="#1A1A1A",
-    #         corner_radius=8
-    #     )
-    #     texto_frame.place(relx=0.5, rely=0.52, anchor="center", relwidth=0.85)
-
-    #     ctk.CTkLabel(
-    #         texto_frame,
-    #         text="Eliminando configuración anterior...",
-    #         font=("Arial", 18, "bold"),
-    #         text_color="white",     # Q1: color explícito en lugar del default gris del tema
-    #         wraplength=ancho - 80,
-    #         justify="center"
-    #     ).pack(padx=12, pady=8)
-
-    #     barra = ctk.CTkProgressBar(self.reinicio_modal, mode="indeterminate", height=18, indeterminate_speed=1.5)
-    #     barra.place(relx=0.5, rely=0.82, anchor="center", relwidth=0.85)
-    #     barra.start()
-
-    #     self.reinicio_modal.lift()
-    #     self.reinicio_modal.focus_force()
-    #     self.registrar_log_reinicio("[reinicio] Modal de reinicio mostrado")
-
     def mostrar_modal_reinicio(self):
         """Muestra una ventana modal de reinicio con imagen de fondo y barra indeterminada."""
         self.registrar_log_reinicio("[reinicio] mostrar_modal_reinicio iniciado")
@@ -1121,15 +1277,6 @@ class ITMessenger(ctk.CTk):
             relwidth=1,
             relheight=1
         )
-
-        # ctk.CTkLabel(
-        #     self.reinicio_modal,
-        #     text="Eliminando configuración anterior...",
-        #     font=("Arial", 18, "bold"),
-        #     text_color="#000000",
-        #     wraplength=ancho - 40,
-        #     justify="center"
-        # ).place(relx=0.5, rely=0.70, anchor="center")
 
         barra = ctk.CTkProgressBar(
             self.reinicio_modal,
@@ -1214,5 +1361,6 @@ class ITMessenger(ctk.CTk):
         self.after(self.cierre_reinicio_delay_ms, self.destroy)
 
     def on_closing(self):
+        self.guardar_config()
         self.detener_observer()
         self.destroy()
