@@ -15,57 +15,6 @@ BOTONES_PRESET = [
     {"texto": "Hay facturas!",    "color": "#2ECC71", "hover": "#1B7641", "img": "facturas_btn.png"}
 ]
 
-# TEMAS_PREDEFINIDOS = [
-#     {
-#         "id": "actual",
-#         "nombre": "Actual",
-#         "colores": {
-#             "Ayuda en Barra":   {"color": "#E74C3C", "hover": "#6F251D"},
-#             "Snacks!":          {"color": "#F1C40F", "hover": "#8A700A"},
-#             "Hora del cafÃ©":   {"color": "#3498DB", "hover": "#1C5377"},
-#             "Consulta urgente": {"color": "#8E44AD", "hover": "#522764"},
-#             "A comer...!":      {"color": "#D35400", "hover": "#7B3100"},
-#             "Hay facturas!":    {"color": "#2ECC71", "hover": "#1B7641"}
-#         }
-#     },
-#     {
-#         "id": "oficina",
-#         "nombre": "Oficina",
-#         "colores": {
-#             "Ayuda en Barra":   {"color": "#2563EB", "hover": "#1E40AF"},
-#             "Snacks!":          {"color": "#0EA5E9", "hover": "#0369A1"},
-#             "Hora del cafÃ©":   {"color": "#14B8A6", "hover": "#0F766E"},
-#             "Consulta urgente": {"color": "#19C175", "hover": "#0B8051"},
-#             "A comer...!":      {"color": "#0BE159", "hover": "#15803D"},
-#             "Hay facturas!":    {"color": "#84CC16", "hover": "#4D7C0F"}
-#         }
-#     },
-#     {
-#         "id": "vivo",
-#         "nombre": "Vivo",
-#         "colores": {
-#             "Ayuda en Barra":   {"color": "#EF4444", "hover": "#991B1B"},
-#             "Snacks!":          {"color": "#F97316", "hover": "#9A3412"},
-#             "Hora del cafÃ©":   {"color": "#EAB308", "hover": "#854D0E"},
-#             "Consulta urgente": {"color": "#A855F7", "hover": "#6B21A8"},
-#             "A comer...!":      {"color": "#EC4899", "hover": "#9D174D"},
-#             "Hay facturas!":    {"color": "#10B981", "hover": "#047857"}
-#         }
-#     },
-#     {
-#         "id": "profundo",
-#         "nombre": "Profundo",
-#         "colores": {
-#             "Ayuda en Barra":   {"color": "#7F1D1D", "hover": "#450A0A"},
-#             "Snacks!":          {"color": "#92400E", "hover": "#451A03"},
-#             "Hora del cafÃ©":   {"color": "#1E3A8A", "hover": "#172554"},
-#             "Consulta urgente": {"color": "#581C87", "hover": "#3B0764"},
-#             "A comer...!":      {"color": "#064E3B", "hover": "#022C22"},
-#             "Hay facturas!":    {"color": "#365314", "hover": "#1A2E05"}
-#         }
-#     }
-# ]
-
 def _tema_colores(pares):
     colores = {}
     for boton, par in zip(BOTONES_PRESET, pares):

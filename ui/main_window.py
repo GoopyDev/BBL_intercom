@@ -5,8 +5,8 @@ import re
 import socket
 import subprocess
 import sys
-import tempfile
-import uuid
+import threading
+import time
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
@@ -33,6 +33,7 @@ class ITMessenger(ctk.CTk):
         super().__init__()
         self.hostname = socket.gethostname().upper()
         self.ruta_config = os.path.join(os.environ["APPDATA"], "IT_Messenger_Config.json")
+        self.ruta_runtime = os.path.join(os.environ["APPDATA"], "BBL_Chat_Runtime.json")
         self.ruta_teams = ""
         self.alias = ""
         self.check_vars = {}
@@ -53,9 +54,74 @@ class ITMessenger(ctk.CTk):
         self.botones_rapidos = []
         self.boton_rapido_presionado = None
         self.startup_enabled_var = ctk.BooleanVar(value=False)
+        self.reinicio_delay_ms = 3000
+        self.cierre_reinicio_delay_ms = 750
+        self.reinicio_modal = None
+        self.reinicio_bg_image = None
+        self.reinicio_bg_pil_image = None
+        self.ruta_log_reinicio = os.path.join(os.path.dirname(self.ruta_config), "IT_Messenger_Config.log")
 
+        self.guardar_ruta_ejecucion_actual()
         self.cargar_config()
         self.setup_ui()
+
+    def obtener_ruta_ejecucion_actual(self):
+        """Devuelve la ruta estable desde la que se debe relanzar la app."""
+        if getattr(sys, "frozen", False):
+            candidatos = [sys.executable, sys.argv[0]]
+        else:
+            candidatos = [os.path.abspath(sys.argv[0])]
+
+        for candidato in candidatos:
+            if not candidato:
+                continue
+
+            ruta = os.path.abspath(candidato)
+            if os.path.isfile(ruta) and not self.es_ruta_temporal(ruta):
+                return ruta
+
+        return ""
+
+    def es_ruta_temporal(self, ruta):
+        """Evita persistir rutas temporales usadas por PyInstaller onefile."""
+        try:
+            ruta_abs = os.path.abspath(ruta)
+            temp_abs = os.path.abspath(os.environ.get("TEMP") or os.environ.get("TMP") or "")
+            if temp_abs and os.path.commonpath([ruta_abs, temp_abs]) == temp_abs:
+                return True
+        except Exception:
+            pass
+
+        partes = os.path.abspath(ruta).upper().split(os.sep)
+        return any(parte.startswith("_MEI") for parte in partes)
+
+    def guardar_ruta_ejecucion_actual(self):
+        """Persiste el ejecutable real para reinicios fuera del runtime temporal."""
+        ruta_ejecucion = self.obtener_ruta_ejecucion_actual()
+        if not ruta_ejecucion:
+            return
+
+        try:
+            with open(self.ruta_runtime, "w", encoding="utf-8") as f:
+                json.dump({
+                    "executable_path": ruta_ejecucion
+                }, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"No se pudo guardar la ruta de ejecucion: {e}")
+
+    def obtener_ruta_ejecucion_guardada(self):
+        """Lee la ruta persistida y valida que siga existiendo."""
+        try:
+            with open(self.ruta_runtime, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            ruta = os.path.abspath(data.get("executable_path") or "")
+            if os.path.isfile(ruta) and not self.es_ruta_temporal(ruta):
+                return ruta
+        except Exception:
+            pass
+
+        return self.obtener_ruta_ejecucion_actual()
 
     def cargar_config(self):
         """Carga la configuracion local y prepara el equipo si ya estaba registrado."""
@@ -101,16 +167,42 @@ class ITMessenger(ctk.CTk):
         ctk.CTkLabel(self.reg_frame, text="Registro de Equipo", font=("Arial", 24, "bold")).pack(pady=20)
         self.ent_alias = ctk.CTkEntry(self.reg_frame, placeholder_text="Tu Alias o Nombre...", height=40)
         self.ent_alias.pack(pady=10, fill="x", padx=60)
+        self.ent_alias.bind("<KeyRelease>", self.actualizar_estado_registro)
+        self.ent_alias.bind("<Return>", self.vincular_con_enter)
 
-        ctk.CTkButton(self.reg_frame, text="Vincular Carpeta Compartida", command=self.vincular).pack(pady=10)
+        self.btn_vincular = ctk.CTkButton(
+            self.reg_frame,
+            text="Vincular Carpeta Compartida",
+            command=self.vincular,
+            state="disabled"
+        )
+        self.btn_vincular.pack(pady=10)
         self.lbl_info = ctk.CTkLabel(self.reg_frame, text="Ruta no seleccionada", text_color="gray")
         self.lbl_info.pack()
 
+    def alias_registro_valido(self):
+        return bool(self.ent_alias.get().strip())
+
+    def actualizar_estado_registro(self, event=None):
+        estado = "normal" if self.alias_registro_valido() else "disabled"
+        self.btn_vincular.configure(state=estado)
+
+    def vincular_con_enter(self, event=None):
+        if self.alias_registro_valido():
+            self.vincular()
+        return "break"
+
     def vincular(self):
         """Guarda la carpeta compartida seleccionada y registra el equipo."""
+        alias = self.ent_alias.get().strip()
+        if not alias:
+            self.lbl_info.configure(text="Completá el alias para continuar.", text_color="#D9534F")
+            self.actualizar_estado_registro()
+            self.ent_alias.focus_set()
+            return
+
         ruta = filedialog.askdirectory()
         if ruta:
-            alias = self.ent_alias.get() or self.hostname
             os.makedirs(os.path.join(ruta, self.hostname), exist_ok=True)
 
             self.ruta_teams = ruta
@@ -147,9 +239,7 @@ class ITMessenger(ctk.CTk):
 
     def obtener_datos_acceso_inicio_windows(self):
         if getattr(sys, "frozen", False):
-            target = os.path.abspath(sys.argv[0])
-            if not os.path.isfile(target):
-                target = os.path.abspath(sys.executable)
+            target = self.obtener_ruta_ejecucion_guardada()
             arguments = ""
             working_dir = os.path.dirname(target)
         else:
@@ -498,8 +588,8 @@ class ITMessenger(ctk.CTk):
         self.botones_rapidos = []
         self.cargar_temas()
 
-        self.grid_columnconfigure(0, weight=2)
-        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=7)
+        self.grid_columnconfigure(1, weight=3)
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=1)
 
@@ -587,7 +677,7 @@ class ITMessenger(ctk.CTk):
         ctk.CTkLabel(left_p, text="Mensajes Rápidos", font=("Arial", 18, "bold")).pack(pady=10)
 
         quick_p = ctk.CTkScrollableFrame(left_p, fg_color="transparent")
-        quick_p.pack(expand=True, fill="both", padx=6, pady=0)
+        quick_p.pack(expand=True, fill="both", padx=4, pady=0)
 
         for b in BOTONES_PRESET:
             try:
@@ -617,7 +707,7 @@ class ITMessenger(ctk.CTk):
                 font=("Arial", 20, "bold"),
                 compound="left"
             )
-            btn.pack(pady=5, fill="x", padx=36)
+            btn.pack(pady=5, fill="x", padx=6)
             self.botones_rapidos.append((btn, b))
             btn.bind("<Enter>", lambda event, boton=btn, config=b: self.activar_hover_boton(boton, config))
             btn.bind("<Leave>", lambda event, boton=btn, config=b: self.desactivar_hover_boton(boton, config))
@@ -629,6 +719,7 @@ class ITMessenger(ctk.CTk):
 
         self.txt_libre = ctk.CTkEntry(custom_p, placeholder_text="Escribir mensaje personalizado...", height=40)
         self.txt_libre.pack(fill="x", pady=(0, 6))
+        self.txt_libre.bind("<Return>", self.enviar_libre_con_enter)
         self.btn_enviar_personalizado = ctk.CTkButton(custom_p, text="Enviar Personalizado", command=self.enviar_libre)
         self.btn_enviar_personalizado.pack()
         self.aplicar_colores_botones_generales()
@@ -776,6 +867,10 @@ class ITMessenger(ctk.CTk):
                 self.mostrar_confirmacion_envio("✅ Se ha enviado el mensaje personalizado")
                 self.txt_libre.delete(0, "end")
 
+    def enviar_libre_con_enter(self, event=None):
+        self.enviar_libre()
+        return "break"
+
     def alternar_modo(self):
         """Alterna entre light y dark segun el estado del switch."""
         self.aplicar_modo_apariencia()
@@ -838,7 +933,23 @@ class ITMessenger(ctk.CTk):
         )
 
     def on_msg_received(self, remitente, contenido):
-        self.after(0, lambda: ToastPopup(self, remitente, contenido))
+        self.after(0, lambda: ToastPopup(self, remitente, contenido, on_reply=self.enviar_respuesta))
+
+    def enviar_respuesta(self, mensaje_original, texto):
+        """Envia una respuesta directa al equipo que genero el mensaje original."""
+        destino = mensaje_original.get("from_hostname") if isinstance(mensaje_original, dict) else None
+        if not destino:
+            return
+
+        enviar_mensaje(
+            self.ruta_teams,
+            self.hostname,
+            self.alias,
+            [destino],
+            texto,
+            respuesta_a=mensaje_original
+        )
+        self.mostrar_confirmacion_envio("Respuesta enviada")
 
     def detener_observer(self):
         self.observer = detener_observer(self.observer)
@@ -853,50 +964,254 @@ class ITMessenger(ctk.CTk):
         if not confirmar:
             return
 
-        try:
-            if os.path.exists(self.ruta_config):
-                os.remove(self.ruta_config)
-        except Exception as e:
-            messagebox.showerror("Error", f"No se pudo borrar la configuracion:\n{e}")
+        self.registrar_log_reinicio("[reinicio] Boton Volver a registrar presionado")
+        executable_path = self.obtener_ruta_ejecucion_guardada()
+        self.registrar_log_reinicio(f"[reinicio] Ruta de ejecucion guardada: {executable_path}")
+        if not executable_path:
+            self.registrar_log_reinicio("[reinicio] No se encontro ruta de ejecucion guardada")
+            messagebox.showerror(
+                "Error",
+                "No se pudo encontrar la ruta original de BBL_Chat.exe para reiniciar la aplicación."
+            )
             return
 
-        self.detener_observer()
+        self.mostrar_modal_reinicio()
+        self.registrar_log_reinicio(f"[reinicio] Programando reinicio en {self.reinicio_delay_ms}ms")
+        self._programar_reinicio(executable_path)
 
-        # En PyInstaller --onefile, el runtime embebido y la carpeta temporal _MEIxxxxx
-        # pueden limpiarse mientras el proceso todavía se está cerrando. Por eso no
-        # reiniciamos directamente con os.execl ni con subprocess dentro del mismo
-        # proceso. Creamos un .bat temporal que espera un momento, relanza el EXE y
-        # luego se borra a sí mismo.
-        if getattr(sys, "frozen", False):
-            target = os.path.abspath(sys.argv[0])
-            if not os.path.isfile(target):
-                target = os.path.abspath(sys.executable)
-            command_line = subprocess.list2cmdline([target] + sys.argv[1:])
-        else:
-            target = os.path.abspath(sys.argv[0])
-            command_line = subprocess.list2cmdline([sys.executable, target] + sys.argv[1:])
-
-        bat_path = os.path.join(tempfile.gettempdir(), f"restart_{uuid.uuid4().hex}.bat")
-        bat_contents = (
-            "@echo off\r\n"
-            "rem Espera breve para que el proceso actual termine y el runtime PyInstaller se libere.\r\n"
-            "ping 127.0.0.1 -n 3 >nul\r\n"
-            f'start "" {command_line}\r\n'
-            'del "%~f0" 2>nul\r\n'
+    def _programar_reinicio(self, executable_path):
+        """Agenda el reinicio real despues de dejar visible el modal."""
+        self.after(
+            self.reinicio_delay_ms,
+            lambda: self.ejecutar_reinicio_limpio(executable_path)
         )
 
-        try:
-            with open(bat_path, "w", encoding="utf-8") as f:
-                f.write(bat_contents)
+    # def mostrar_modal_reinicio(self):
+    #     """Muestra una ventana modal de reinicio con imagen de fondo y barra indeterminada."""
+    #     self.registrar_log_reinicio("[reinicio] mostrar_modal_reinicio iniciado")
+    #     if self.reinicio_modal is not None:
+    #         try:
+    #             self.reinicio_modal.destroy()
+    #         except Exception:
+    #             pass
 
-            subprocess.Popen(bat_path, shell=True)
+    #     self.reinicio_modal = ctk.CTkToplevel(self)
+    #     self.reinicio_modal.title("🔄 Reiniciando...")
+    #     self.reinicio_modal.resizable(False, False)
+    #     self.reinicio_modal.transient(self)
+
+    #     ancho = 580
+    #     alto = 280
+    #     self.reinicio_modal.geometry(f"{ancho}x{alto}")
+    #     self.centrar_ventana(self.reinicio_modal, ancho, alto)
+
+    #     try:
+    #         from PIL import ImageTk
+    #         imagen_path = resource_path(os.path.join("res", "restart.png"))
+    #         self.reinicio_bg_pil_image = Image.open(imagen_path)
+    #         self.reinicio_bg_image = ctk.CTkImage(
+    #             light_image=self.reinicio_bg_pil_image,
+    #             dark_image=self.reinicio_bg_pil_image,
+    #             size=(ancho, alto)
+    #         )
+    #         # Q3: ícono de ventana desde restart.png, con delay para sobrevivir al init de CTkToplevel
+    #         icon_img = self.reinicio_bg_pil_image.copy().resize((32, 32), Image.Resampling.LANCZOS)
+    #         self._reinicio_icon_photo = ImageTk.PhotoImage(icon_img)  # referencia en self para evitar GC
+
+    #         def _aplicar_icono():
+    #             try:
+    #                 if self.reinicio_modal and self.reinicio_modal.winfo_exists():
+    #                     self.reinicio_modal.wm_iconphoto(False, self._reinicio_icon_photo)
+    #             except Exception:
+    #                 pass
+
+    #         self.reinicio_modal.after(200, _aplicar_icono)
+    #     except Exception as e:
+    #         self.reinicio_bg_image = None
+    #         print(f"No se pudo cargar restart.png: {e}")
+
+    #     # Q2: imagen de fondo en su propio label, sin texto
+    #     bg_label = ctk.CTkLabel(
+    #         self.reinicio_modal,
+    #         image=self.reinicio_bg_image,
+    #         text=""
+    #     )
+    #     bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+
+    #     # Q1 + Q2: texto blanco sobre banda oscura para contraste con la imagen
+    #     texto_frame = ctk.CTkFrame(
+    #         self.reinicio_modal,
+    #         fg_color="#1A1A1A",
+    #         corner_radius=8
+    #     )
+    #     texto_frame.place(relx=0.5, rely=0.52, anchor="center", relwidth=0.85)
+
+    #     ctk.CTkLabel(
+    #         texto_frame,
+    #         text="Eliminando configuración anterior...",
+    #         font=("Arial", 18, "bold"),
+    #         text_color="white",     # Q1: color explícito en lugar del default gris del tema
+    #         wraplength=ancho - 80,
+    #         justify="center"
+    #     ).pack(padx=12, pady=8)
+
+    #     barra = ctk.CTkProgressBar(self.reinicio_modal, mode="indeterminate", height=18, indeterminate_speed=1.5)
+    #     barra.place(relx=0.5, rely=0.82, anchor="center", relwidth=0.85)
+    #     barra.start()
+
+    #     self.reinicio_modal.lift()
+    #     self.reinicio_modal.focus_force()
+    #     self.registrar_log_reinicio("[reinicio] Modal de reinicio mostrado")
+
+    def mostrar_modal_reinicio(self):
+        """Muestra una ventana modal de reinicio con imagen de fondo y barra indeterminada."""
+        self.registrar_log_reinicio("[reinicio] mostrar_modal_reinicio iniciado")
+
+        if self.reinicio_modal is not None:
+            try:
+                self.reinicio_modal.destroy()
+            except Exception:
+                pass
+
+        self.reinicio_modal = ctk.CTkToplevel(self)
+        self.reinicio_modal.title("Reiniciando...")
+        self.reinicio_modal.resizable(False, False)
+        self.reinicio_modal.transient(self)
+
+        ancho = 580
+        alto = 280
+        self.reinicio_modal.geometry(f"{ancho}x{alto}")
+        self.centrar_ventana(self.reinicio_modal, ancho, alto)
+
+        try:
+            # Imagen de fondo
+            imagen_path = resource_path(os.path.join("res", "restart.png"))
+            self.reinicio_bg_pil_image = Image.open(imagen_path)
+
+            self.reinicio_bg_image = ctk.CTkImage(
+                light_image=self.reinicio_bg_pil_image,
+                dark_image=self.reinicio_bg_pil_image,
+                size=(ancho, alto)
+            )
+
+            # Ícono de la ventana
+            def aplicar_icono_reinicio():
+                try:
+                    if self.reinicio_modal and self.reinicio_modal.winfo_exists():
+                        ico_path = resource_path(os.path.join("res", "restart_icon.ico"))
+                        self.reinicio_modal.iconbitmap(ico_path)
+                except Exception as e:
+                    self.registrar_log_reinicio(f"[reinicio] No se pudo aplicar icono modal: {e}")
+
+            self.reinicio_modal.after(200, aplicar_icono_reinicio)
+
         except Exception as e:
-            messagebox.showerror("Error", f"No se pudo reiniciar la aplicación:\n{e}")
+            self.reinicio_bg_image = None
+            print(f"No se pudo cargar restart.png: {e}")
+
+        fondo = ctk.CTkLabel(
+            self.reinicio_modal,
+            image=self.reinicio_bg_image,
+            text=""
+        )
+        fondo.place(
+            relx=0.5,
+            rely=0.5,
+            anchor="center",
+            relwidth=1,
+            relheight=1
+        )
+
+        # ctk.CTkLabel(
+        #     self.reinicio_modal,
+        #     text="Eliminando configuración anterior...",
+        #     font=("Arial", 18, "bold"),
+        #     text_color="#000000",
+        #     wraplength=ancho - 40,
+        #     justify="center"
+        # ).place(relx=0.5, rely=0.70, anchor="center")
+
+        barra = ctk.CTkProgressBar(
+            self.reinicio_modal,
+            mode="indeterminate",
+            height=18,
+            indeterminate_speed=1.5
+        )
+        barra.place(relx=0.5, rely=0.95, anchor="center", relwidth=0.85)
+        barra.start()
+
+        self.reinicio_modal.lift()
+        self.reinicio_modal.focus_force()
+
+        self.registrar_log_reinicio("[reinicio] Modal de reinicio mostrado")
+
+    def centrar_ventana(self, ventana, ancho, alto):
+        ventana.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - ancho) // 2
+        y = self.winfo_y() + (self.winfo_height() - alto) // 2
+        ventana.geometry(f"{ancho}x{alto}+{x}+{y}")
+
+    def registrar_log_reinicio(self, mensaje):
+        """Escribe un log de depuracion al lado del archivo de configuración local."""
+        try:
+            with open(self.ruta_log_reinicio, "a", encoding="utf-8") as log_file:
+                log_file.write(f"{mensaje}\n")
+        except Exception:
+            pass
+
+    def ejecutar_reinicio_limpio(self, executable_path):
+        """Detiene observer, borra config local y relanza la aplicación de forma limpia."""
+        self.registrar_log_reinicio("[reinicio] Iniciando reinicio limpio")
+        self.detener_observer()
+        self.registrar_log_reinicio("[reinicio] Observer detenido")
+
+        try:
+            if os.path.exists(self.ruta_config):
+                self.registrar_log_reinicio(f"[reinicio] Se encontro config: {self.ruta_config}")
+                os.remove(self.ruta_config)
+                self.registrar_log_reinicio("[reinicio] Configuracion eliminada correctamente")
+            else:
+                self.registrar_log_reinicio("[reinicio] No se encontro el archivo de configuracion para borrar")
+        except Exception as e:
+            self.registrar_log_reinicio(f"[reinicio] Error al borrar configuracion: {type(e).__name__}: {e}")
+
+        try:
+            if getattr(sys, "frozen", False):
+                comando = [executable_path]
+                cwd = os.path.dirname(executable_path)
+            else:
+                comando = [sys.executable, executable_path]
+                cwd = os.path.dirname(executable_path)
+
+            # ✅ Forzar instancia nueva con su propio _MEIxxxxx
+            env = os.environ.copy()
+            env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+
+            self.registrar_log_reinicio(f"[reinicio] Ejecutando comando: {comando} en cwd={cwd}")
+            subprocess.Popen(comando, cwd=cwd, env=env)
+            self.registrar_log_reinicio("[reinicio] Nueva instancia lanzada correctamente")
+        except Exception as e:
+            self.registrar_log_reinicio(f"[reinicio] Error al lanzar nueva instancia: {type(e).__name__}: {e}")
+            messagebox.showerror(
+                "Error",
+                f"No se pudo reiniciar la aplicación:\n{e}"
+            )
+            if self.reinicio_modal is not None:
+                try:
+                    self.reinicio_modal.destroy()
+                except Exception:
+                    pass
             return
 
-        self.quit()
-        self.destroy()
-        sys.exit(0)
+        if self.reinicio_modal is not None:
+            try:
+                self.reinicio_modal.destroy()
+            except Exception:
+                pass
+            self.reinicio_modal = None
+
+        self.registrar_log_reinicio("[reinicio] Programa actual se cerrara despues del delay")
+        self.after(self.cierre_reinicio_delay_ms, self.destroy)
 
     def on_closing(self):
         self.detener_observer()

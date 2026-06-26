@@ -4,7 +4,7 @@ import time
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from services.message_service import revisar_mensajes_pendientes
+from services.message_service import parsear_mensaje, revisar_mensajes_pendientes
 
 
 class ManejadorMensajes(FileSystemEventHandler):
@@ -20,7 +20,7 @@ class ManejadorMensajes(FileSystemEventHandler):
                 with open(event.src_path, "r", encoding="utf-8") as f:
                     contenido = f.read()
                 remitente = os.path.basename(event.src_path).split("_")[0]
-                self.callback(remitente, contenido)
+                self.callback(remitente, parsear_mensaje(remitente, contenido))
                 os.remove(event.src_path)
             except Exception as e:
                 print(f"Error al leer mensaje: {e}")
