@@ -296,12 +296,13 @@ class ITMessenger(ctk.CTk):
             width = min(width, work_width)
             height = min(height, work_height)
             x = left + max((work_width - width) // 2, 0)
-            y = top + max((work_height - height) // 2, 0)
+            y = top
             return x, y, width, height
 
         monitor_guardado = self.obtener_monitor_de_geometria(x, y, width, height, monitores)
         if self.geometria_intersecta_monitor(x, y, width, height, monitor_guardado):
-            return self.ajustar_geometria_a_monitor(x, y, width, height, monitor_guardado)
+            x, _, width, height = self.ajustar_geometria_a_monitor(x, y, width, height, monitor_guardado)
+            return x, monitor_guardado["work"][1], width, height
 
         left, top, right, bottom = principal["work"]
         work_width = max(right - left, 500)
@@ -309,7 +310,7 @@ class ITMessenger(ctk.CTk):
         width = min(width, work_width)
         height = min(height, work_height)
         x = left + max((work_width - width) // 2, 0)
-        y = top + max((work_height - height) // 2, 0)
+        y = top
         return x, y, width, height
 
     def restaurar_geometria_ventana(self):
@@ -388,8 +389,28 @@ class ITMessenger(ctk.CTk):
                     "height": height
                 })
 
+        geometria = self._validar_geometria_config(geometria)
         geometria["state"] = "zoomed" if estado == "zoomed" else "normal"
         return geometria
+
+    def _validar_geometria_config(self, geometria):
+        """Asegura que la ventana guardada no exceda 1000x900 y queda centrada en el monitor actual."""
+        max_width = 1000
+        max_height = 900
+
+        width = min(int(geometria.get("width", max_width)), max_width)
+        height = min(int(geometria.get("height", max_height)), max_height)
+        x = int(geometria.get("x", 0))
+        y = int(geometria.get("y", 0))
+
+        if width != geometria.get("width") or height != geometria.get("height"):
+            monitores = self.obtener_monitores()
+            monitor_actual = self.obtener_monitor_de_geometria(x, y, width, height, monitores)
+            left, top, right, bottom = monitor_actual["work"]
+            x = left + max((right - left - width) // 2, 0)
+            y = top + max((bottom - top - height) // 2, 0)
+
+        return {"x": x, "y": y, "width": width, "height": height}
 
     def mostrar_registro(self):
         """Muestra la pantalla de vinculacion inicial."""
