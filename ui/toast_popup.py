@@ -1,3 +1,4 @@
+import datetime
 import os
 
 import customtkinter as ctk
@@ -10,11 +11,16 @@ from utils.resources import resource_path
 ROTACION_FONDOS = {}
 MENSAJES_RAPIDOS = {boton["texto"] for boton in BOTONES_PRESET}
 COLOR_POPUP_FONDO = ("#CBD5E1", "#202123")
-COLOR_POPUP_BORDE = ("#A8B0BA", "#FFFFFF")
+COLOR_POPUP_BORDE = ("#A8B0BA", "#151515")
 COLOR_POPUP_TEXTO = ("#1F2933", "#FFFFFF")
 COLOR_POPUP_CONTENEDOR = ("#F5F7FA", "#333333")
+COLOR_POPUP_TIMESTMP = "#D4AF37"
 DESPLAZAMIENTO_POPUP = 20
 POPUPS_ANTES_DE_REINICIAR_POSICION = 5
+POSICION_MENSAJE_RAPIDO_ALIAS = {"x": 33, "y": 165}
+POSICION_MENSAJE_RAPIDO = {"x": 100, "y": 194}
+POSICION_TIMESTMP_RAPIDO = {"x": 15, "y": 196}
+POSICION_TIMESTMP_PERSONALIZADO = {"x": 205, "y": 220, "width": 135}
 
 
 def obtener_fondo_popup(mensaje):
@@ -50,7 +56,7 @@ class ToastPopup(ctk.CTkToplevel):
         self.es_mensaje_rapido = self.mensaje_texto in MENSAJES_RAPIDOS and not self.mensaje_data.get("reply_to")
 
         self.width = 360
-        self.height = 200 if self.es_mensaje_rapido else 280
+        self.height = 220 if self.es_mensaje_rapido else 270
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -135,6 +141,8 @@ class ToastPopup(ctk.CTkToplevel):
         if self.reply_frame is not None:
             self.reply_frame.lift()
         self.msg_label.lift()
+        if getattr(self, "timestamp_label", None) is not None:
+            self.timestamp_label.lift()
         self.close_btn.lift()
 
         self.fade_in()
@@ -146,6 +154,7 @@ class ToastPopup(ctk.CTkToplevel):
                 "from_hostname": mensaje.get("from_hostname"),
                 "from_alias": mensaje.get("from_alias") or remitente,
                 "text": mensaje.get("text") or "",
+                "created_at": mensaje.get("created_at"),
                 "reply_to": mensaje.get("reply_to") if isinstance(mensaje.get("reply_to"), dict) else None
             }
 
@@ -154,6 +163,7 @@ class ToastPopup(ctk.CTkToplevel):
             "from_hostname": None,
             "from_alias": remitente,
             "text": mensaje,
+            "created_at": None,
             "reply_to": None
         }
 
@@ -178,23 +188,46 @@ class ToastPopup(ctk.CTkToplevel):
         except Exception as e:
             print(f"Error cargando fondo: {e}")
 
+    def _formatear_timestamp(self, tipo):
+        created_at = self.mensaje_data.get("created_at")
+        if not created_at:
+            return ""
+
+        try:
+            if isinstance(created_at, datetime.datetime):
+                dt = created_at
+            else:
+                dt = datetime.datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return ""
+
+        if tipo == "rapido":
+            return dt.strftime("%d/%m %H:%M")
+
+        return f"{dt.strftime('%d/%m/%Y')}\n{dt.strftime('%H:%M')}"
+
     def _crear_contenido_rapido(self, remitente, mensaje):
         self.title_label = ctk.CTkLabel(
             self.main,
             text=remitente,
             font=("Consolas", 15, "bold"),
+            height=1,
             anchor="w",
             text_color="#FFFFFF",
             fg_color="#000000",
             bg_color="#000000"
         )
-        self.title_label.place(x=40, y=145)
+        self.title_label.place(
+            x=POSICION_MENSAJE_RAPIDO_ALIAS["x"],
+            y=POSICION_MENSAJE_RAPIDO_ALIAS["y"]
+        )
         self._bind_drag(self.title_label)
 
         self.msg_label = ctk.CTkLabel(
             self.main,
             text=mensaje,
             font=("Consolas", 13),
+            height=1,
             justify="left",
             wraplength=240,
             anchor="w",
@@ -202,8 +235,25 @@ class ToastPopup(ctk.CTkToplevel):
             fg_color="#000000",
             bg_color="#000000"
         )
-        self.msg_label.place(x=100, y=168)
+        self.msg_label.place(x=POSICION_MENSAJE_RAPIDO["x"], y=POSICION_MENSAJE_RAPIDO["y"])
         self._bind_drag(self.msg_label)
+
+        self.timestamp_label = ctk.CTkLabel(
+            self.main,
+            text=self._formatear_timestamp("rapido"),
+            font=("Consolas", 10, "bold"),
+            height=1,
+            justify="left",
+            anchor="w",
+            text_color=COLOR_POPUP_TIMESTMP,
+            fg_color="#000000",
+            bg_color="#000000"
+        )
+        self.timestamp_label.place(
+            x=POSICION_TIMESTMP_RAPIDO["x"],
+            y=POSICION_TIMESTMP_RAPIDO["y"]
+        )
+        self._bind_drag(self.timestamp_label)
 
     def _crear_contenido_personalizado(self):
         self.title_label = ctk.CTkLabel(
@@ -212,6 +262,7 @@ class ToastPopup(ctk.CTkToplevel):
             font=("Consolas", 14, "bold"),
             anchor="w",
             width=275,
+            height=1,
             text_color=COLOR_POPUP_TEXTO
         )
         self.title_label.place(x=18, y=14)
@@ -268,6 +319,23 @@ class ToastPopup(ctk.CTkToplevel):
             command=self.mostrar_respuesta
         )
         self.reply_button.place(x=18, y=220)
+
+        self.timestamp_label = ctk.CTkLabel(
+            self.main,
+            text=self._formatear_timestamp("personalizado"),
+            font=("Consolas", 10, "bold"),
+            justify="right",
+            anchor="e",
+            width=POSICION_TIMESTMP_PERSONALIZADO["width"],
+            text_color=COLOR_POPUP_TIMESTMP,
+            fg_color="transparent",
+            bg_color="transparent"
+        )
+        self.timestamp_label.place(
+            x=POSICION_TIMESTMP_PERSONALIZADO["x"],
+            y=POSICION_TIMESTMP_PERSONALIZADO["y"]
+        )
+        self._bind_drag(self.timestamp_label)
 
         if not self.mensaje_data.get("from_hostname") or self.on_reply is None:
             self.reply_button.configure(state="disabled", text="Sin respuesta")
