@@ -18,6 +18,7 @@ from services.observer_service import detener_observer, iniciar_observer
 from services.profile_service import actualizar_profile_equipo, obtener_alias_equipo
 from ui.toast_popup import ToastPopup
 from utils.resources import resource_path
+from widgets.message_textbox import MessageTextBox
 
 
 # Esto le dice a Windows que trate a este proceso como una aplicacion con identidad propia.
@@ -971,9 +972,12 @@ class ITMessenger(ctk.CTk):
         custom_p = ctk.CTkFrame(left_p, fg_color="transparent")
         custom_p.pack(fill="x", padx=24, pady=(8, 12))
 
-        self.txt_libre = ctk.CTkEntry(custom_p, placeholder_text="Escribir mensaje personalizado...", height=40)
+        self.txt_libre = MessageTextBox(
+            custom_p,
+            height=4,
+            command=self.enviar_libre
+        )
         self.txt_libre.pack(fill="x", pady=(0, 6))
-        self.txt_libre.bind("<Return>", self.enviar_libre_con_enter)
         self.btn_enviar_personalizado = ctk.CTkButton(custom_p, text="Enviar Personalizado", command=self.enviar_libre)
         self.btn_enviar_personalizado.pack()
         self.aplicar_colores_botones_generales()
@@ -1115,15 +1119,11 @@ class ITMessenger(ctk.CTk):
 
     def enviar_libre(self):
         """Envia el texto escrito manualmente y limpia el campo."""
-        msg = self.txt_libre.get()
+        msg = self.txt_libre.get_message()
         if msg:
             if self.enviar(msg):
                 self.mostrar_confirmacion_envio("✅ Se ha enviado el mensaje personalizado")
-                self.txt_libre.delete(0, "end")
-
-    def enviar_libre_con_enter(self, event=None):
-        self.enviar_libre()
-        return "break"
+                self.txt_libre.clear()
 
     def alternar_modo(self):
         """Alterna entre light y dark segun el estado del switch."""
@@ -1173,6 +1173,9 @@ class ITMessenger(ctk.CTk):
             ctk.set_appearance_mode("dark")
         else:
             ctk.set_appearance_mode("light")
+
+        if hasattr(self, "txt_libre") and self.txt_libre is not None:
+            self.txt_libre.update_theme()
 
     def revisar_mensajes_pendientes(self):
         revisar_mensajes_pendientes(self.ruta_teams, self.hostname, self.on_msg_received)
