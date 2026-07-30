@@ -30,9 +30,10 @@ except Exception:
 
 class ITMessenger(ctk.CTk):
     """Ventana principal de la aplicacion CustomTkinter."""
-    def __init__(self):
+    def __init__(self, single_instance_controller=None):
         super().__init__()
         self.hostname = socket.gethostname().upper()
+        self.single_instance_controller = single_instance_controller
         self.ruta_config = os.path.join(os.environ["APPDATA"], "IT_Messenger_Config.json")
         self.ruta_runtime = os.path.join(os.environ["APPDATA"], "BBL_Chat_Runtime.json")
         self.ruta_teams = ""
@@ -41,6 +42,7 @@ class ITMessenger(ctk.CTk):
         self.observer = None
         self.modo_oscuro_var = ctk.BooleanVar(value=True)
         self.confirmacion_envio_after_id = None
+        self.inicio_escucha_after_id = None
         self.banner_top_pil_image = None
         self.banner_top_image = None
         self.banner_top_label = None
@@ -68,6 +70,7 @@ class ITMessenger(ctk.CTk):
             "width": 850,
             "height": 850
         }
+        self.ui_principal_lista = False
 
         self.guardar_ruta_ejecucion_actual()
         self.cargar_config()
@@ -148,7 +151,6 @@ class ITMessenger(ctk.CTk):
                 if isinstance(ventana, dict):
                     self.ventana_config = ventana
             self.actualizar_profile_equipo()
-            self.iniciar_escucha()
 
     def setup_ui(self):
         """Configura la ventana y decide entre registro o pantalla principal."""
@@ -158,6 +160,8 @@ class ITMessenger(ctk.CTk):
         self.aplicar_icono()
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.bind("<Configure>", self.actualizar_geometria_ventana)
+
+        self._register_single_instance_window()
 
         if not self.ruta_teams:
             self.mostrar_registro()
@@ -463,7 +467,6 @@ class ITMessenger(ctk.CTk):
             self.alias = alias
             self.guardar_config()
             self.actualizar_profile_equipo()
-            self.iniciar_escucha()
             self.mostrar_principal()
 
     def guardar_config(self):
@@ -1016,6 +1019,7 @@ class ITMessenger(ctk.CTk):
         self.confirmacion_envio_label.pack(fill="both", expand=True, padx=12, pady=5)
         self.confirmacion_envio.place_forget()
         self.sincronizar_inicio_windows()
+        self.programar_inicio_escucha_post_ui()
 
     def on_contacto_changed(self):
         """Desactiva ENVIAR A TODOS cuando se activa un checkbox de contacto."""
@@ -1180,8 +1184,36 @@ class ITMessenger(ctk.CTk):
     def revisar_mensajes_pendientes(self):
         revisar_mensajes_pendientes(self.ruta_teams, self.hostname, self.on_msg_received)
 
+    def programar_inicio_escucha_post_ui(self):
+        """Inicia la escucha recien cuando la pantalla principal ya entro al loop visual."""
+        self.ui_principal_lista = False
+
+        if self.inicio_escucha_after_id is not None:
+            try:
+                self.after_cancel(self.inicio_escucha_after_id)
+            except Exception:
+                pass
+            self.inicio_escucha_after_id = None
+
+        self.after_idle(self._marcar_ui_lista_y_programar_escucha)
+
+    def _marcar_ui_lista_y_programar_escucha(self):
+        try:
+            self.update_idletasks()
+        except Exception:
+            return
+
+        self.ui_principal_lista = True
+        self.inicio_escucha_after_id = self.after(250, self.iniciar_escucha)
+
     def iniciar_escucha(self):
         """Activa el observer de watchdog si todavia no esta activo."""
+        self.inicio_escucha_after_id = None
+
+        if not self.ui_principal_lista:
+            self.programar_inicio_escucha_post_ui()
+            return
+
         self.observer = iniciar_observer(
             self.ruta_teams,
             self.hostname,
@@ -1190,6 +1222,10 @@ class ITMessenger(ctk.CTk):
         )
 
     def on_msg_received(self, remitente, contenido):
+        if not self.ui_principal_lista:
+            self.after(250, lambda: self.on_msg_received(remitente, contenido))
+            return
+
         self.after(0, lambda: ToastPopup(self, remitente, contenido, on_reply=self.enviar_respuesta))
 
     def enviar_respuesta(self, mensaje_original, texto):
@@ -1384,7 +1420,23 @@ class ITMessenger(ctk.CTk):
         self.registrar_log_reinicio("[reinicio] Programa actual se cerrara despues del delay")
         self.after(self.cierre_reinicio_delay_ms, self.destroy)
 
+    def _register_single_instance_window(self):
+        if self.single_instance_controller is None:
+            return
+        try:
+            hwnd = self.winfo_id()
+            if hwnd:
+                self.single_instance_controller.register_window(hwnd)
+        except Exception:
+            pass
+
     def on_closing(self):
+        try:
+            if self.single_instance_controller is not None:
+                self.single_instance_controller.unregister_window(self.winfo_id())
+        except Exception:
+            pass
+
         self.guardar_config()
         self.detener_observer()
         self.destroy()

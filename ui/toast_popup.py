@@ -2,7 +2,7 @@ import datetime
 import os
 
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageOps
 
 from config.constants import BOTONES_PRESET, FONDOS_POPUP
 from utils.resources import resource_path
@@ -10,6 +10,7 @@ from utils.resources import resource_path
 
 ROTACION_FONDOS = {}
 MENSAJES_RAPIDOS = {boton["texto"] for boton in BOTONES_PRESET}
+IMAGENES_BOTONES_RAPIDOS = {boton["texto"]: boton["img"] for boton in BOTONES_PRESET}
 COLOR_POPUP_FONDO = ("#CBD5E1", "#202123")
 COLOR_POPUP_BORDE = ("#A8B0BA", "#151515")
 COLOR_POPUP_TEXTO = ("#1F2933", "#FFFFFF")
@@ -88,6 +89,11 @@ class ToastPopup(ctk.CTkToplevel):
         self.drag_window_x = x
         self.drag_window_y = self.current_y
         self.dragging = False
+        self._closing = False
+        self._fade_after_id = None
+        self._close_after_id = None
+        self._close_btn_pressed = False
+        self._send_btn_pressed = False
 
         self.main = ctk.CTkFrame(
             self,
@@ -108,6 +114,12 @@ class ToastPopup(ctk.CTkToplevel):
         self.reply_button = None
         self.reply_frame = None
         self.reply_entry = None
+        self.reply_text_var = None
+        self.reply_error_label = None
+        self.reply_error_after_id = None
+        self.send_button = None
+        self.quick_reply_image = None
+        self._reply_btn_pressed = False
 
         fondo = obtener_fondo_popup(self.mensaje_texto)
         if fondo:
@@ -126,10 +138,13 @@ class ToastPopup(ctk.CTkToplevel):
             height=28,
             fg_color="transparent",
             bg_color="transparent",
-            hover_color="#D33",
-            command=self.close_animation
+            hover_color="#D33"
         )
         self.close_btn.place(x=325, y=6)
+        self.close_btn.bind("<ButtonPress-1>", self._on_close_press)
+        self.close_btn.bind("<ButtonRelease-1>", self._on_close_release)
+        self.close_btn.bind("<B1-Motion>", self._stop_interactive_drag)
+        self.close_btn.bind("<Leave>", self._on_close_leave)
 
         if self.bg_label is not None:
             self.bg_label.lift()
@@ -238,6 +253,15 @@ class ToastPopup(ctk.CTkToplevel):
         self.msg_label.place(x=POSICION_MENSAJE_RAPIDO["x"], y=POSICION_MENSAJE_RAPIDO["y"])
         self._bind_drag(self.msg_label)
 
+        self.reply_button = ctk.CTkButton(
+            self.main,
+            text="Responder",
+            width=100,
+            height=28
+        )
+        self.reply_button.place(x=18, y=14)
+        self._bind_reply_button_events()
+
         self.timestamp_label = ctk.CTkLabel(
             self.main,
             text=self._formatear_timestamp("rapido"),
@@ -254,6 +278,9 @@ class ToastPopup(ctk.CTkToplevel):
             y=POSICION_TIMESTMP_RAPIDO["y"]
         )
         self._bind_drag(self.timestamp_label)
+
+        if not self.mensaje_data.get("from_hostname") or self.on_reply is None:
+            self.reply_button.configure(state="disabled", text="Sin respuesta")
 
     def _crear_contenido_personalizado(self):
         self.title_label = ctk.CTkLabel(
@@ -315,10 +342,10 @@ class ToastPopup(ctk.CTkToplevel):
             self.main,
             text="Responder",
             width=110,
-            height=30,
-            command=self.mostrar_respuesta
+            height=30
         )
         self.reply_button.place(x=18, y=220)
+        self._bind_reply_button_events()
 
         self.timestamp_label = ctk.CTkLabel(
             self.main,
@@ -345,6 +372,14 @@ class ToastPopup(ctk.CTkToplevel):
             return
 
         self.reply_button.place_forget()
+        if self.es_mensaje_rapido:
+            self._crear_respuesta_rapida()
+        else:
+            self._crear_respuesta_personalizada()
+
+        self._configurar_controles_respuesta()
+
+    def _crear_respuesta_personalizada(self):
         self.reply_frame = ctk.CTkFrame(self.main, fg_color="transparent", width=320, height=58)
         self.reply_frame.place(x=18, y=204)
         self.reply_frame.grid_columnconfigure(0, weight=1)
@@ -358,33 +393,250 @@ class ToastPopup(ctk.CTkToplevel):
             text_color=COLOR_POPUP_TEXTO
         ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
 
+        self._crear_fila_input_respuesta(row=1, column=0, button_column=1)
+
+    def _crear_respuesta_rapida(self):
+        self.reply_frame = ctk.CTkFrame(
+            self.main,
+            fg_color=("#F8FAFC", "#1F2933"),
+            border_width=1,
+            border_color=("#CBD5E1", "#111827"),
+            corner_radius=8,
+            width=328,
+            height=150
+        )
+        self.reply_frame.place(x=16, y=42)
+        self.reply_frame.grid_columnconfigure(0, weight=0, minsize=58)
+        self.reply_frame.grid_columnconfigure(1, weight=1)
+        self.reply_frame.grid_columnconfigure(2, weight=0, minsize=78)
+        self.reply_frame.grid_rowconfigure(2, weight=1)
+
+        miniatura = self._crear_miniatura_respuesta_rapida()
+        if miniatura is not None:
+            ctk.CTkLabel(
+                self.reply_frame,
+                image=miniatura,
+                text="",
+                width=54,
+                height=54
+            ).grid(row=0, column=0, rowspan=2, padx=(10, 8), pady=(10, 6), sticky="nw")
+
+        ctk.CTkLabel(
+            self.reply_frame,
+            text=f"Respondiendo a {self.remitente}",
+            font=("Consolas", 10, "bold"),
+            anchor="w",
+            text_color=COLOR_POPUP_TEXTO
+        ).grid(row=0, column=1, columnspan=2, sticky="ew", padx=(0, 10), pady=(10, 0))
+
+        ctk.CTkLabel(
+            self.reply_frame,
+            text=self._resumen_texto(self.mensaje_texto, 58),
+            font=("Consolas", 10),
+            anchor="w",
+            text_color=("#4B5563", "#CBD5E1")
+        ).grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, 10), pady=(0, 8))
+
+        self._crear_fila_input_respuesta(row=2, column=0, button_column=2, columnspan=2)
+
+    def _crear_miniatura_respuesta_rapida(self):
+        try:
+            imagen = self.bg_pil_image
+            if imagen is None:
+                nombre_imagen = IMAGENES_BOTONES_RAPIDOS.get(self.mensaje_texto)
+                if not nombre_imagen:
+                    return None
+                imagen = Image.open(resource_path(os.path.join("res", nombre_imagen)))
+
+            miniatura = ImageOps.fit(imagen.convert("RGB"), (50, 50), method=Image.Resampling.LANCZOS)
+            miniatura = ImageEnhance.Color(miniatura).enhance(0.18)
+            self.quick_reply_image = ctk.CTkImage(
+                light_image=miniatura,
+                dark_image=miniatura,
+                size=(50, 50)
+            )
+            return self.quick_reply_image
+        except Exception as e:
+            print(f"Error creando miniatura de respuesta: {e}")
+            return None
+
+    def _crear_fila_input_respuesta(self, row, column, button_column, columnspan=1):
+        self.reply_text_var = ctk.StringVar(value="")
         self.reply_entry = ctk.CTkEntry(
             self.reply_frame,
             placeholder_text="Escribir respuesta...",
-            height=30
+            height=30,
+            textvariable=self.reply_text_var
         )
-        self.reply_entry.grid(row=1, column=0, sticky="ew", padx=(0, 6))
+        self.reply_entry.grid(
+            row=row,
+            column=column,
+            columnspan=columnspan,
+            sticky="ew",
+            padx=(10 if self.es_mensaje_rapido else 0, 6),
+            pady=(4 if self.es_mensaje_rapido else 0, 10 if self.es_mensaje_rapido else 0)
+        )
         self.reply_entry.focus_set()
-        self.reply_entry.bind("<Return>", lambda event: self.enviar_respuesta())
 
-        ctk.CTkButton(
+        self.send_button = ctk.CTkButton(
             self.reply_frame,
             text="Enviar",
             width=70,
             height=30,
-            command=self.enviar_respuesta
-        ).grid(row=1, column=1)
+            state="disabled"
+        )
+        self.send_button.grid(
+            row=row,
+            column=button_column,
+            padx=(0, 10 if self.es_mensaje_rapido else 0),
+            pady=(4 if self.es_mensaje_rapido else 0, 10 if self.es_mensaje_rapido else 0),
+            sticky="e"
+        )
+
+    def _configurar_controles_respuesta(self):
+        self.reply_text_var.trace_add("write", self._actualizar_estado_enviar)
+        self.reply_entry.bind("<Return>", lambda event: self.enviar_respuesta())
+        self.send_button.bind("<ButtonPress-1>", self._on_send_press)
+        self.send_button.bind("<ButtonRelease-1>", self._on_send_release)
+        self.send_button.bind("<B1-Motion>", self._stop_interactive_drag)
+        self.send_button.bind("<Leave>", self._on_send_leave)
+        self.reply_entry.bind("<ButtonPress-1>", self._stop_text_input_drag)
+        self.reply_entry.bind("<B1-Motion>", self._stop_text_input_drag)
+        self.reply_entry.bind("<ButtonRelease-1>", self._stop_text_input_drag)
+        self._actualizar_estado_enviar()
+
+    def _bind_reply_button_events(self):
+        self.reply_button.bind("<ButtonPress-1>", self._on_reply_press)
+        self.reply_button.bind("<ButtonRelease-1>", self._on_reply_release)
+        self.reply_button.bind("<B1-Motion>", self._stop_interactive_drag)
+        self.reply_button.bind("<Leave>", self._on_reply_leave)
+
+    def _actualizar_estado_enviar(self, *args):
+        if self.send_button is None or self.reply_text_var is None:
+            return
+
+        texto = self.reply_text_var.get().strip()
+        estado = "normal" if texto else "disabled"
+        self.send_button.configure(state=estado)
+
+    def _mostrar_error_respuesta_vacia(self):
+        if self.reply_frame is None:
+            return
+
+        if self.reply_error_label is None:
+            self.reply_error_label = ctk.CTkLabel(
+                self.reply_frame,
+                text="Ingresa un mensaje",
+                font=("Consolas", 10, "bold"),
+                text_color="#FFFFFF",
+                fg_color="#D33",
+                corner_radius=6
+            )
+
+        self.reply_error_label.place(relx=1.0, rely=0.0, x=-8, y=-6, anchor="ne")
+        self.reply_error_label.lift()
+
+        if self.reply_error_after_id is not None:
+            try:
+                self.after_cancel(self.reply_error_after_id)
+            except Exception:
+                pass
+
+        self.reply_error_after_id = self.after(1600, self._ocultar_error_respuesta_vacia)
+
+    def _ocultar_error_respuesta_vacia(self):
+        self.reply_error_after_id = None
+        if self.reply_error_label is not None:
+            self.reply_error_label.place_forget()
+
+    def _on_close_press(self, event):
+        if self._closing:
+            return "break"
+
+        self._close_btn_pressed = True
+        self.dragging = False
+        return "break"
+
+    def _on_close_release(self, event):
+        if self._close_btn_pressed and self._event_inside_widget(event, self.close_btn):
+            self.close_animation()
+        self._close_btn_pressed = False
+        return "break"
+
+    def _on_close_leave(self, event):
+        self._close_btn_pressed = False
+        return "break"
+
+    def _on_send_press(self, event):
+        if self._closing:
+            return "break"
+
+        if not self._respuesta_tiene_texto():
+            self._mostrar_error_respuesta_vacia()
+            return "break"
+
+        self._send_btn_pressed = True
+        self.dragging = False
+        return "break"
+
+    def _on_send_release(self, event):
+        if self._send_btn_pressed and self._event_inside_widget(event, self.send_button):
+            self.enviar_respuesta()
+        self._send_btn_pressed = False
+        return "break"
+
+    def _on_send_leave(self, event):
+        self._send_btn_pressed = False
+        return "break"
+
+    def _on_reply_press(self, event):
+        if self._closing:
+            return "break"
+
+        try:
+            if self.reply_button.cget("state") == "disabled":
+                return "break"
+        except Exception:
+            pass
+
+        self._reply_btn_pressed = True
+        self.dragging = False
+        return "break"
+
+    def _on_reply_release(self, event):
+        if self._reply_btn_pressed and self._event_inside_widget(event, self.reply_button):
+            self.mostrar_respuesta()
+        self._reply_btn_pressed = False
+        return "break"
+
+    def _on_reply_leave(self, event):
+        self._reply_btn_pressed = False
+        return "break"
+
+    def _stop_interactive_drag(self, event=None):
+        self.dragging = False
+        return "break"
+
+    def _stop_text_input_drag(self, event=None):
+        self.dragging = False
 
     def enviar_respuesta(self):
         if self.reply_entry is None or self.on_reply is None:
             return
 
-        texto = self.reply_entry.get().strip()
+        texto = self.reply_text_var.get().strip() if self.reply_text_var is not None else self.reply_entry.get().strip()
         if not texto:
+            self._mostrar_error_respuesta_vacia()
             return
 
         self.on_reply(self.mensaje_data, texto)
         self.close_animation()
+
+    def _respuesta_tiene_texto(self):
+        if self.reply_text_var is None:
+            return False
+
+        return bool(self.reply_text_var.get().strip())
 
     def _resumen_texto(self, texto, largo):
         texto = " ".join((texto or "").split())
@@ -398,13 +650,59 @@ class ToastPopup(ctk.CTkToplevel):
         widget.bind("<ButtonRelease-1>", self.end_drag)
 
     def start_drag(self, event):
+        if self._closing or self._is_interactive_event(event):
+            self.dragging = False
+            return "break"
+
         self.dragging = True
         self.drag_start_x = event.x_root
         self.drag_start_y = event.y_root
         self.drag_window_x = self.current_x
         self.drag_window_y = self.current_y
 
+    def _is_interactive_event(self, event):
+        ignored_widgets = [
+            getattr(self, "close_btn", None),
+            getattr(self, "send_button", None),
+            getattr(self, "reply_button", None),
+            getattr(self, "reply_entry", None)
+        ]
+
+        return any(
+            widget is not None and self._event_targets_widget(event, widget)
+            for widget in ignored_widgets
+        )
+
+    def _event_targets_widget(self, event, widget):
+        event_widget = getattr(event, "widget", None)
+        while event_widget is not None:
+            if event_widget is widget:
+                return True
+            event_widget = getattr(event_widget, "master", None)
+
+        return self._event_inside_widget(event, widget)
+
+    def _event_inside_widget(self, event, widget):
+        try:
+            x = event.x_root
+            y = event.y_root
+            left = widget.winfo_rootx()
+            top = widget.winfo_rooty()
+            right = left + widget.winfo_width()
+            bottom = top + widget.winfo_height()
+        except Exception:
+            return False
+
+        return left <= x <= right and top <= y <= bottom
+
     def do_drag(self, event):
+        if self._closing or self._is_interactive_event(event):
+            self.dragging = False
+            return "break"
+
+        if not self.dragging:
+            return None
+
         new_x = self.drag_window_x + (event.x_root - self.drag_start_x)
         new_y = self.drag_window_y + (event.y_root - self.drag_start_y)
 
@@ -415,6 +713,13 @@ class ToastPopup(ctk.CTkToplevel):
         self.geometry(f"{self.width}x{self.height}+{new_x}+{new_y}")
 
     def end_drag(self, event):
+        if self._is_interactive_event(event):
+            self.dragging = False
+            return "break"
+
+        if not self.dragging:
+            return None
+
         self.dragging = False
         self.current_x = self.target_x
         self.current_y = self.target_y
@@ -424,6 +729,10 @@ class ToastPopup(ctk.CTkToplevel):
         ToastPopup.contador_posicion = 0
 
     def fade_in(self):
+        if self._closing:
+            self._fade_after_id = None
+            return
+
         alpha = self.attributes("-alpha")
 
         if alpha < 0.98:
@@ -437,23 +746,45 @@ class ToastPopup(ctk.CTkToplevel):
                 f"{self.width}x{self.height}+"
                 f"{int(self.current_x)}+{int(self.current_y)}"
             )
-            self.after(16, self.fade_in)
+            self._fade_after_id = self.after(16, self.fade_in)
+        else:
+            self._fade_after_id = None
 
     def close_animation(self):
+        if self._close_after_id is not None:
+            return
+
+        self._closing = True
+        self.dragging = False
+        self._cancel_after("_fade_after_id")
+        self._animate_close()
+
+    def _animate_close(self):
+        self._close_after_id = None
         alpha = self.attributes("-alpha")
 
         if alpha > 0.02:
             alpha -= 0.06
             self.attributes("-alpha", alpha)
 
-            self.current_y += 3
-            self.width -= 1
-            self.height -= 1
+            self.current_y += 2
 
             self.geometry(
                 f"{self.width}x{self.height}+"
                 f"{int(self.current_x)}+{int(self.current_y)}"
             )
-            self.after(16, self.close_animation)
+            self._close_after_id = self.after(16, self._animate_close)
         else:
             self.destroy()
+
+    def _cancel_after(self, attr_name):
+        after_id = getattr(self, attr_name, None)
+        if after_id is None:
+            return
+
+        try:
+            self.after_cancel(after_id)
+        except Exception:
+            pass
+
+        setattr(self, attr_name, None)

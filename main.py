@@ -1,8 +1,13 @@
 import json
 import os
+import sys
 
+import customtkinter as ctk
+
+from ui.already_running_dialog import AlreadyRunningDialog
 from ui.main_window import ITMessenger
 from ui.splash_screen import SplashScreen
+from utils.single_instance import SingleInstanceController
 
 
 def cargar_ventana_guardada():
@@ -29,17 +34,31 @@ SPLASH_TARGET_SIZE = (333, 400)  # Ej: (640, 360) para forzar un tamaño fijo; N
 
 
 if __name__ == "__main__":
+    ventana_guardada = cargar_ventana_guardada()
+    controller = SingleInstanceController()
+    if not controller.acquire():
+        hwnd = controller.activate_existing_window()
+
+        root = ctk.CTk()
+        root.withdraw()
+        dialog = AlreadyRunningDialog(parent=root, anchor_hwnd=hwnd, anchor_geometry=ventana_guardada)
+        dialog.show_over_parent()
+        root.mainloop()
+        root.destroy()
+        sys.exit(0)
+
     splash = SplashScreen(
         SPLASH_GIF_PATH,
-        last_geometry=cargar_ventana_guardada(),
+        last_geometry=ventana_guardada,
         playback_speed=SPLASH_PLAYBACK_SPEED,
         target_size=SPLASH_TARGET_SIZE,
     )
     if splash.loaded:
         splash.show()
 
-    app = ITMessenger()
+    app = ITMessenger(single_instance_controller=controller)
     app.mainloop()
+    controller.release()
 
 # Para compilar:
-# pyinstaller --onefile --windowed --name BBL_Chat --icon=res/BBL_Chat.ico --add-data "res;res" --hidden-import=PIL --hidden-import=customtkinter --hidden-import=winshell --hidden-import=win32com --hidden-import=win32com.client main.py
+# pyinstaller --onefile --windowed --name BBL_Chat --icon=res/BBL_Chat.ico --add-data "res;res" --hidden-import=PIL --hidden-import=customtkinter --hidden-import=watchdog.events --hidden-import=watchdog.observers --hidden-import=watchdog.observers.api --hidden-import=watchdog.observers.read_directory_changes --hidden-import=watchdog.observers.winapi --hidden-import=winshell --hidden-import=win32com --hidden-import=win32com.client main.py
