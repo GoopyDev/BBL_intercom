@@ -22,6 +22,23 @@ POSICION_MENSAJE_RAPIDO_ALIAS = {"x": 33, "y": 165}
 POSICION_MENSAJE_RAPIDO = {"x": 100, "y": 194}
 POSICION_TIMESTMP_RAPIDO = {"x": 15, "y": 196}
 POSICION_TIMESTMP_PERSONALIZADO = {"x": 205, "y": 220, "width": 135}
+MARGEN_POPUP_X = 18
+
+ANCHO_NOTIFICACION = 360    # Ancho total del toast notification
+ALTO_NOTIFICACION = 220  # Alto base del toast notification
+
+ANCHO_CONTENIDO_POPUP = 320
+
+# RESPUESTAS
+ANCHO_RESPUESTA_RAPIDA = 328
+ALTO_RESPUESTA_RAPIDA = 140
+POSICION_REPLY_FRAME_Y = 128
+ALTO_VISTA_PREVIA_REPLY = 70
+ANCHO_BOTON_ENVIAR = 70
+SEPARACION_INPUT_BOTON = 6
+PADDING_INTERNO_REPLY = 8  # separación entre el borde blanco del "reply_frame" y el contenido
+ANCHO_INPUT_RESPUESTA_PERSONALIZADA = (ANCHO_CONTENIDO_POPUP - ANCHO_BOTON_ENVIAR - SEPARACION_INPUT_BOTON - (PADDING_INTERNO_REPLY * 2)) # <- nuevo: deja hueco para el padding izq/der
+ANCHO_INPUT_RESPUESTA_RAPIDA = ANCHO_RESPUESTA_RAPIDA - 20 - ANCHO_BOTON_ENVIAR - SEPARACION_INPUT_BOTON
 
 
 def obtener_fondo_popup(mensaje):
@@ -57,7 +74,7 @@ class ToastPopup(ctk.CTkToplevel):
         self.es_mensaje_rapido = self.mensaje_texto in MENSAJES_RAPIDOS and not self.mensaje_data.get("reply_to")
 
         self.width = 360
-        self.height = 220 if self.es_mensaje_rapido else 270
+        self.height = ALTO_NOTIFICACION if self.es_mensaje_rapido else ALTO_NOTIFICACION + 50
 
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -111,9 +128,11 @@ class ToastPopup(ctk.CTkToplevel):
         self.bg_pil_image = None
         self.bg_label = None
         self.scroll_frame = None
+        self.message_reply_preview = None
         self.reply_button = None
         self.reply_frame = None
         self.reply_entry = None
+        self.reply_preview = None
         self.reply_text_var = None
         self.reply_error_label = None
         self.reply_error_after_id = None
@@ -297,11 +316,11 @@ class ToastPopup(ctk.CTkToplevel):
 
         self.contenedor_limite = ctk.CTkFrame(
             self.main,
-            width=320,
+            width=ANCHO_CONTENIDO_POPUP,
             height=155,
             fg_color=COLOR_POPUP_CONTENEDOR
         )
-        self.contenedor_limite.place(x=18, y=48)
+        self.contenedor_limite.place(x=MARGEN_POPUP_X, y=48)
         self.contenedor_limite.pack_propagate(False)
 
         self.scroll_frame = ctk.CTkScrollableFrame(
@@ -314,18 +333,23 @@ class ToastPopup(ctk.CTkToplevel):
         if respuesta_a:
             preview_sender = respuesta_a.get("from_alias") or "Mensaje original"
             preview_text = respuesta_a.get("text") or ""
-            self.preview_label = ctk.CTkLabel(
+            self.message_reply_preview = ctk.CTkTextbox(
                 self.scroll_frame,
-                text=f"{preview_sender}: {preview_text}",
+                width=295,
+                height=48,
                 font=("Consolas", 11),
-                justify="left",
-                wraplength=285,
-                anchor="nw",
+                wrap="word",
                 text_color=("#4B5563", "#CBD5E1"),
                 fg_color=("#E2E8F0", "#242424"),
-                corner_radius=6
+                corner_radius=6,
+                border_width=0
             )
-            self.preview_label.pack(fill="x", padx=(0, 10), pady=(0, 8))
+            self.message_reply_preview.insert("1.0", f"{preview_sender}: {preview_text}")
+            self.message_reply_preview.configure(state="disabled")
+            self.message_reply_preview.pack(fill="x", padx=(0, 10), pady=(0, 8))
+            self.message_reply_preview.bind("<ButtonPress-1>", self._stop_text_input_drag)
+            self.message_reply_preview.bind("<B1-Motion>", self._stop_text_input_drag)
+            self.message_reply_preview.bind("<ButtonRelease-1>", self._stop_text_input_drag)
 
         self.msg_label = ctk.CTkLabel(
             self.scroll_frame,
@@ -372,6 +396,9 @@ class ToastPopup(ctk.CTkToplevel):
             return
 
         self.reply_button.place_forget()
+        if getattr(self, "timestamp_label", None) is not None:
+            self.timestamp_label.place_forget()
+
         if self.es_mensaje_rapido:
             self._crear_respuesta_rapida()
         else:
@@ -380,20 +407,42 @@ class ToastPopup(ctk.CTkToplevel):
         self._configurar_controles_respuesta()
 
     def _crear_respuesta_personalizada(self):
-        self.reply_frame = ctk.CTkFrame(self.main, fg_color="transparent", width=320, height=58)
-        self.reply_frame.place(x=18, y=204)
-        self.reply_frame.grid_columnconfigure(0, weight=1)
+        self.reply_frame = ctk.CTkFrame(
+            self.main,
+            fg_color="transparent",
+            border_color="white",
+            border_width=1,
+            width=ANCHO_CONTENIDO_POPUP,
+            height=ALTO_RESPUESTA_RAPIDA
+        )
+        self.reply_frame.place(x=MARGEN_POPUP_X, y=POSICION_REPLY_FRAME_Y)
+        self.reply_frame.grid_propagate(False)
+        self.reply_frame.grid_columnconfigure(0, weight=0, minsize=ANCHO_INPUT_RESPUESTA_PERSONALIZADA)
+        self.reply_frame.grid_columnconfigure(1, weight=0, minsize=ANCHO_BOTON_ENVIAR)
+        self.reply_frame.grid_rowconfigure(1, weight=1)
 
-        preview = self._resumen_texto(self.mensaje_texto, 70)
         ctk.CTkLabel(
             self.reply_frame,
-            text=f"Respondiendo a {self.remitente}: {preview}",
+            text=f"Respondiendo a {self.remitente}",
             font=("Consolas", 10),
             anchor="w",
-            text_color=COLOR_POPUP_TEXTO
-        ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+            text_color=COLOR_POPUP_TEXTO,
+            height=0
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", padx=(PADDING_INTERNO_REPLY, PADDING_INTERNO_REPLY), pady=(PADDING_INTERNO_REPLY, 0))
 
-        self._crear_fila_input_respuesta(row=1, column=0, button_column=1)
+        self._crear_preview_respuesta(
+            texto=self.mensaje_texto,
+            row=1,
+            column=0,
+            columnspan=2,
+            width=ANCHO_CONTENIDO_POPUP - (PADDING_INTERNO_REPLY * 2),
+            height=ALTO_VISTA_PREVIA_REPLY,
+            padx=(PADDING_INTERNO_REPLY, PADDING_INTERNO_REPLY),
+            pady=(2, 4),
+            sticky="nsew"
+        )
+
+        self._crear_fila_input_respuesta(row=2, column=0, button_column=1)
 
     def _crear_respuesta_rapida(self):
         self.reply_frame = ctk.CTkFrame(
@@ -402,13 +451,14 @@ class ToastPopup(ctk.CTkToplevel):
             border_width=1,
             border_color=("#CBD5E1", "#111827"),
             corner_radius=8,
-            width=328,
+            width=ANCHO_RESPUESTA_RAPIDA,
             height=150
         )
         self.reply_frame.place(x=16, y=42)
+        self.reply_frame.grid_propagate(False)
         self.reply_frame.grid_columnconfigure(0, weight=0, minsize=58)
-        self.reply_frame.grid_columnconfigure(1, weight=1)
-        self.reply_frame.grid_columnconfigure(2, weight=0, minsize=78)
+        self.reply_frame.grid_columnconfigure(1, weight=0, minsize=ANCHO_INPUT_RESPUESTA_RAPIDA - 58)
+        self.reply_frame.grid_columnconfigure(2, weight=0, minsize=ANCHO_BOTON_ENVIAR)
         self.reply_frame.grid_rowconfigure(2, weight=1)
 
         miniatura = self._crear_miniatura_respuesta_rapida()
@@ -429,13 +479,16 @@ class ToastPopup(ctk.CTkToplevel):
             text_color=COLOR_POPUP_TEXTO
         ).grid(row=0, column=1, columnspan=2, sticky="ew", padx=(0, 10), pady=(10, 0))
 
-        ctk.CTkLabel(
-            self.reply_frame,
-            text=self._resumen_texto(self.mensaje_texto, 58),
-            font=("Consolas", 10),
-            anchor="w",
-            text_color=("#4B5563", "#CBD5E1")
-        ).grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, 10), pady=(0, 8))
+        self._crear_preview_respuesta(
+            texto=self.mensaje_texto,
+            row=1,
+            column=1,
+            columnspan=2,
+            width=ANCHO_RESPUESTA_RAPIDA - 88,
+            height=60,
+            padx=(0, 10),
+            pady=(0, 8)
+        )
 
         self._crear_fila_input_respuesta(row=2, column=0, button_column=2, columnspan=2)
 
@@ -460,11 +513,38 @@ class ToastPopup(ctk.CTkToplevel):
             print(f"Error creando miniatura de respuesta: {e}")
             return None
 
+    def _crear_preview_respuesta(self, texto, row, column, columnspan, width, height, padx, pady, sticky="ew"):
+        self.reply_preview = ctk.CTkTextbox(
+            self.reply_frame,
+            width=width,
+            height=height,
+            font=("Consolas", 10),
+            wrap="word",
+            text_color=("#4B5563", "#CBD5E1"),
+            fg_color=("#E2E8F0", "#242424"),
+            corner_radius=6,
+            border_width=0
+        )
+        self.reply_preview.insert("1.0", texto or "")
+        self.reply_preview.configure(state="disabled")
+        self.reply_preview.grid(
+            row=row,
+            column=column,
+            columnspan=columnspan,
+            sticky="ew",
+            padx=padx,
+            pady=pady
+        )
+        self.reply_preview.bind("<ButtonPress-1>", self._stop_text_input_drag)
+        self.reply_preview.bind("<B1-Motion>", self._stop_text_input_drag)
+        self.reply_preview.bind("<ButtonRelease-1>", self._stop_text_input_drag)
+
     def _crear_fila_input_respuesta(self, row, column, button_column, columnspan=1):
         self.reply_text_var = ctk.StringVar(value="")
         self.reply_entry = ctk.CTkEntry(
             self.reply_frame,
             placeholder_text="Escribir respuesta...",
+            width=ANCHO_INPUT_RESPUESTA_RAPIDA if self.es_mensaje_rapido else ANCHO_INPUT_RESPUESTA_PERSONALIZADA,
             height=30,
             textvariable=self.reply_text_var
         )
@@ -473,23 +553,27 @@ class ToastPopup(ctk.CTkToplevel):
             column=column,
             columnspan=columnspan,
             sticky="ew",
-            padx=(10 if self.es_mensaje_rapido else 0, 6),
-            pady=(4 if self.es_mensaje_rapido else 0, 10 if self.es_mensaje_rapido else 0)
+            padx=(10 if self.es_mensaje_rapido else PADDING_INTERNO_REPLY, SEPARACION_INPUT_BOTON),
+            pady=(4 if self.es_mensaje_rapido else 0, 10 if self.es_mensaje_rapido else PADDING_INTERNO_REPLY)
+            # padx=(10 if self.es_mensaje_rapido else 0, 6),
+            # pady=(4 if self.es_mensaje_rapido else 0, 10 if self.es_mensaje_rapido else 0)
         )
         self.reply_entry.focus_set()
 
         self.send_button = ctk.CTkButton(
             self.reply_frame,
             text="Enviar",
-            width=70,
+            width=ANCHO_BOTON_ENVIAR,
             height=30,
             state="disabled"
         )
         self.send_button.grid(
             row=row,
             column=button_column,
-            padx=(0, 10 if self.es_mensaje_rapido else 0),
-            pady=(4 if self.es_mensaje_rapido else 0, 10 if self.es_mensaje_rapido else 0),
+            padx=(0, 10 if self.es_mensaje_rapido else PADDING_INTERNO_REPLY),
+            pady=(4 if self.es_mensaje_rapido else 0, 10 if self.es_mensaje_rapido else PADDING_INTERNO_REPLY),
+            # padx=(0, 10 if self.es_mensaje_rapido else 0),
+            # pady=(4 if self.es_mensaje_rapido else 0, 10 if self.es_mensaje_rapido else 0),
             sticky="e"
         )
 
@@ -665,7 +749,9 @@ class ToastPopup(ctk.CTkToplevel):
             getattr(self, "close_btn", None),
             getattr(self, "send_button", None),
             getattr(self, "reply_button", None),
-            getattr(self, "reply_entry", None)
+            getattr(self, "reply_entry", None),
+            getattr(self, "reply_preview", None),
+            getattr(self, "message_reply_preview", None)
         ]
 
         return any(
