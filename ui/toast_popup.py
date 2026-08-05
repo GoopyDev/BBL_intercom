@@ -40,6 +40,11 @@ PADDING_INTERNO_REPLY = 8  # separación entre el borde blanco del "reply_frame"
 ANCHO_INPUT_RESPUESTA_PERSONALIZADA = (ANCHO_CONTENIDO_POPUP - ANCHO_BOTON_ENVIAR - SEPARACION_INPUT_BOTON - (PADDING_INTERNO_REPLY * 2)) # <- nuevo: deja hueco para el padding izq/der
 ANCHO_INPUT_RESPUESTA_RAPIDA = ANCHO_RESPUESTA_RAPIDA - 20 - ANCHO_BOTON_ENVIAR - SEPARACION_INPUT_BOTON
 
+FUENTE_ICONO_COPIAR = ("Segoe UI Symbol", 16)
+ANCHO_BOTON_COPIAR = 34
+ALTO_BOTON_COPIAR = 30
+ICONO_COPIAR = "📋"
+ICONO_COPIADO = "✓"
 
 def obtener_fondo_popup(mensaje):
     """Devuelve el siguiente fondo configurado para el mensaje recibido."""
@@ -135,6 +140,9 @@ class ToastPopup(ctk.CTkToplevel):
         self.reply_preview = None
         self.reply_text_var = None
         self.reply_error_label = None
+        self.copy_button = None
+        self.msg_text_widget = None
+        self._copy_btn_pressed = False
         self.reply_error_after_id = None
         self.send_button = None
         self.quick_reply_image = None
@@ -351,16 +359,32 @@ class ToastPopup(ctk.CTkToplevel):
             self.message_reply_preview.bind("<B1-Motion>", self._stop_text_input_drag)
             self.message_reply_preview.bind("<ButtonRelease-1>", self._stop_text_input_drag)
 
-        self.msg_label = ctk.CTkLabel(
+        self.msg_label = ctk.CTkTextbox(
             self.scroll_frame,
-            text=self.mensaje_texto,
+            width=295,
+            height=90,
             font=("Consolas", 13),
-            justify="left",
-            wraplength=295,
-            anchor="nw",
-            text_color=COLOR_POPUP_TEXTO
+            wrap="word",
+            text_color=COLOR_POPUP_TEXTO,
+            fg_color="transparent",
+            border_width=0,
+            corner_radius=0,
+            activate_scrollbars=True,
+            undo=False
         )
+        self.msg_label.insert("1.0", self.mensaje_texto)
+        self.msg_label.configure(state="normal")
         self.msg_label.pack(fill="x", expand=True, padx=(0, 10), pady=0)
+
+        self.msg_text_widget = getattr(self.msg_label, "_textbox", self.msg_label)
+        self.msg_text_widget.bind("<ButtonPress-1>", self._stop_text_input_drag)
+        self.msg_text_widget.bind("<B1-Motion>", self._stop_text_input_drag)
+        self.msg_text_widget.bind("<ButtonRelease-1>", self._stop_text_input_drag)
+        self.msg_text_widget.bind("<Key>", self._on_message_text_key)
+        self.msg_label.bind("<ButtonPress-1>", self._stop_text_input_drag)
+        self.msg_label.bind("<B1-Motion>", self._stop_text_input_drag)
+        self.msg_label.bind("<ButtonRelease-1>", self._stop_text_input_drag)
+        self.msg_label.bind("<Key>", self._on_message_text_key)
 
         self.reply_button = ctk.CTkButton(
             self.main,
@@ -370,6 +394,23 @@ class ToastPopup(ctk.CTkToplevel):
         )
         self.reply_button.place(x=18, y=220)
         self._bind_reply_button_events()
+
+        self.copy_button = ctk.CTkButton(
+            self.main,
+            text=ICONO_COPIAR,
+            font=FUENTE_ICONO_COPIAR,
+            width=ANCHO_BOTON_COPIAR,
+            height=ALTO_BOTON_COPIAR,
+            fg_color="#2563EB",
+            hover_color="#1D4ED8",
+            text_color="#FFFFFF",
+            corner_radius=8
+        )
+        self.copy_button.place(x=140, y=220)
+        self.copy_button.bind("<ButtonPress-1>", self._on_copy_press)
+        self.copy_button.bind("<ButtonRelease-1>", self._on_copy_release)
+        self.copy_button.bind("<B1-Motion>", self._stop_interactive_drag)
+        self.copy_button.bind("<Leave>", self._on_copy_leave)
 
         self.timestamp_label = ctk.CTkLabel(
             self.main,
@@ -540,13 +581,17 @@ class ToastPopup(ctk.CTkToplevel):
         self.reply_preview.bind("<ButtonRelease-1>", self._stop_text_input_drag)
 
     def _crear_fila_input_respuesta(self, row, column, button_column, columnspan=1):
-        self.reply_text_var = ctk.StringVar(value="")
-        self.reply_entry = ctk.CTkEntry(
+        self.reply_entry = ctk.CTkTextbox(
             self.reply_frame,
-            placeholder_text="Escribir respuesta...",
             width=ANCHO_INPUT_RESPUESTA_RAPIDA if self.es_mensaje_rapido else ANCHO_INPUT_RESPUESTA_PERSONALIZADA,
-            height=30,
-            textvariable=self.reply_text_var
+            height=38,
+            wrap="word",
+            font=("Consolas", 11),
+            fg_color=("#FFFFFF", "#2B2B2B"),
+            border_width=1,
+            corner_radius=8,
+            activate_scrollbars=True,
+            undo=False
         )
         self.reply_entry.grid(
             row=row,
@@ -555,8 +600,6 @@ class ToastPopup(ctk.CTkToplevel):
             sticky="ew",
             padx=(10 if self.es_mensaje_rapido else PADDING_INTERNO_REPLY, SEPARACION_INPUT_BOTON),
             pady=(4 if self.es_mensaje_rapido else 0, 10 if self.es_mensaje_rapido else PADDING_INTERNO_REPLY)
-            # padx=(10 if self.es_mensaje_rapido else 0, 6),
-            # pady=(4 if self.es_mensaje_rapido else 0, 10 if self.es_mensaje_rapido else 0)
         )
         self.reply_entry.focus_set()
 
@@ -578,8 +621,9 @@ class ToastPopup(ctk.CTkToplevel):
         )
 
     def _configurar_controles_respuesta(self):
-        self.reply_text_var.trace_add("write", self._actualizar_estado_enviar)
-        self.reply_entry.bind("<Return>", lambda event: self.enviar_respuesta())
+        self.reply_entry.bind("<KeyRelease>", self._actualizar_estado_enviar)
+        self.reply_entry.bind("<Return>", self._on_reply_return)
+        self.reply_entry.bind("<Shift-Return>", self._on_reply_shift_return)
         self.send_button.bind("<ButtonPress-1>", self._on_send_press)
         self.send_button.bind("<ButtonRelease-1>", self._on_send_release)
         self.send_button.bind("<B1-Motion>", self._stop_interactive_drag)
@@ -587,7 +631,96 @@ class ToastPopup(ctk.CTkToplevel):
         self.reply_entry.bind("<ButtonPress-1>", self._stop_text_input_drag)
         self.reply_entry.bind("<B1-Motion>", self._stop_text_input_drag)
         self.reply_entry.bind("<ButtonRelease-1>", self._stop_text_input_drag)
+        try:
+            self.reply_entry._textbox.bind("<KeyRelease>", self._actualizar_estado_enviar)
+            self.reply_entry._textbox.bind("<Return>", self._on_reply_return)
+            self.reply_entry._textbox.bind("<Shift-Return>", self._on_reply_shift_return)
+            self.reply_entry._textbox.bind("<ButtonPress-1>", self._stop_text_input_drag)
+            self.reply_entry._textbox.bind("<B1-Motion>", self._stop_text_input_drag)
+            self.reply_entry._textbox.bind("<ButtonRelease-1>", self._stop_text_input_drag)
+        except Exception:
+            pass
         self._actualizar_estado_enviar()
+
+    def _on_message_text_key(self, event=None):
+        if event is None:
+            return "break"
+
+        if event.state & 0x4:
+            return None
+
+        if event.keysym in {"BackSpace", "Delete", "Return", "Tab", "Escape"}:
+            return "break"
+
+        if event.keysym in {"Left", "Right", "Up", "Down", "Home", "End", "Prior", "Next"}:
+            return None
+
+        return "break"
+
+    def _on_reply_return(self, event=None):
+        if self._closing:
+            return "break"
+
+        self.enviar_respuesta()
+        return "break"
+
+    def _on_reply_shift_return(self, event=None):
+        if self.reply_entry is None:
+            return "break"
+
+        self.reply_entry.insert("insert", "\n")
+        self.reply_entry.see("end")
+        self._actualizar_estado_enviar()
+        return "break"
+
+    def _on_copy_press(self, event):
+        if self._closing:
+            return "break"
+
+        self._copy_btn_pressed = True
+        self.dragging = False
+        return "break"
+
+    def _on_copy_release(self, event):
+        if self._copy_btn_pressed and self._event_inside_widget(event, self.copy_button):
+            self.copiar_mensaje()
+        self._copy_btn_pressed = False
+        return "break"
+
+    def _on_copy_leave(self, event):
+        self._copy_btn_pressed = False
+        return "break"
+
+    def copiar_mensaje(self):
+        texto = self.mensaje_texto or ""
+        if not texto:
+            return
+
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(texto)
+        except Exception:
+            pass
+
+        if self.copy_button is None:
+            return
+
+        try:
+            self.copy_button.configure(
+                text=ICONO_COPIADO,
+                width=ANCHO_BOTON_COPIAR,
+                height=ALTO_BOTON_COPIAR
+            )
+            self.after(
+                1200,
+                lambda: self.copy_button.configure(
+                    text=ICONO_COPIAR,
+                    width=ANCHO_BOTON_COPIAR,
+                    height=ALTO_BOTON_COPIAR
+                ) if self.copy_button is not None else None
+            )
+        except Exception:
+            pass
 
     def _bind_reply_button_events(self):
         self.reply_button.bind("<ButtonPress-1>", self._on_reply_press)
@@ -596,10 +729,10 @@ class ToastPopup(ctk.CTkToplevel):
         self.reply_button.bind("<Leave>", self._on_reply_leave)
 
     def _actualizar_estado_enviar(self, *args):
-        if self.send_button is None or self.reply_text_var is None:
+        if self.send_button is None or self.reply_entry is None:
             return
 
-        texto = self.reply_text_var.get().strip()
+        texto = self.reply_entry.get("1.0", "end-1c").strip()
         estado = "normal" if texto else "disabled"
         self.send_button.configure(state=estado)
 
@@ -708,7 +841,7 @@ class ToastPopup(ctk.CTkToplevel):
         if self.reply_entry is None or self.on_reply is None:
             return
 
-        texto = self.reply_text_var.get().strip() if self.reply_text_var is not None else self.reply_entry.get().strip()
+        texto = self.reply_entry.get("1.0", "end-1c").strip()
         if not texto:
             self._mostrar_error_respuesta_vacia()
             return
@@ -717,10 +850,10 @@ class ToastPopup(ctk.CTkToplevel):
         self.close_animation()
 
     def _respuesta_tiene_texto(self):
-        if self.reply_text_var is None:
+        if self.reply_entry is None:
             return False
 
-        return bool(self.reply_text_var.get().strip())
+        return bool(self.reply_entry.get("1.0", "end-1c").strip())
 
     def _resumen_texto(self, texto, largo):
         texto = " ".join((texto or "").split())
@@ -751,7 +884,9 @@ class ToastPopup(ctk.CTkToplevel):
             getattr(self, "reply_button", None),
             getattr(self, "reply_entry", None),
             getattr(self, "reply_preview", None),
-            getattr(self, "message_reply_preview", None)
+            getattr(self, "message_reply_preview", None),
+            getattr(self, "msg_text_widget", None),
+            getattr(self, "copy_button", None)
         ]
 
         return any(
