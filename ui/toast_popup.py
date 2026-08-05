@@ -6,6 +6,7 @@ from PIL import Image, ImageEnhance, ImageOps
 
 from config.constants import BOTONES_PRESET, FONDOS_POPUP
 from utils.resources import resource_path
+from ui.tooltip import Tooltip
 
 
 ROTACION_FONDOS = {}
@@ -141,6 +142,7 @@ class ToastPopup(ctk.CTkToplevel):
         self.reply_text_var = None
         self.reply_error_label = None
         self.copy_button = None
+        self.copy_tooltip = None
         self.msg_text_widget = None
         self._copy_btn_pressed = False
         self.reply_error_after_id = None
@@ -411,6 +413,10 @@ class ToastPopup(ctk.CTkToplevel):
         self.copy_button.bind("<ButtonRelease-1>", self._on_copy_release)
         self.copy_button.bind("<B1-Motion>", self._stop_interactive_drag)
         self.copy_button.bind("<Leave>", self._on_copy_leave)
+        try:
+            self.copy_tooltip = Tooltip(self.copy_button, "Copiar", position="above", offset_y=6)
+        except Exception:
+            self.copy_tooltip = None
 
         self.timestamp_label = ctk.CTkLabel(
             self.main,
