@@ -2,10 +2,18 @@ import datetime
 import os
 
 import customtkinter as ctk
+import time
 from PIL import Image, ImageEnhance, ImageOps
 
 from config.constants import BOTONES_PRESET, FONDOS_POPUP
 from utils.resources import resource_path
+from ui.coin_jump_animation import (
+    AnimacionSaltoMoneda,
+    IndicadorRecargaSalto,
+    RECARGA_SALTO_THRESHOLD_MS,
+    RECARGA_SALTO_RATE_MS_PER_PX,
+    RECARGA_SALTO_MAX_EXTRA_PX,
+)
 from ui.tooltip import Tooltip
 
 
@@ -145,6 +153,15 @@ class ToastPopup(ctk.CTkToplevel):
         self.copy_tooltip = None
         self.msg_text_widget = None
         self._copy_btn_pressed = False
+        # contador de presión (ms) para la funcionalidad "Recarga de salto"
+        self._copy_press_start_ms = None
+        self._last_copy_press_duration_ms = 0
+        self._recarga_indicator = None
+        self._copy_original_fg_color = None
+        self._copy_original_hover_color = None
+        self._copy_is_gold = False
+        self._recarga_update_after_id = None
+        self._recarga_hide_after_id = None
         self.reply_error_after_id = None
         self.send_button = None
         self.quick_reply_image = None
@@ -418,6 +435,26 @@ class ToastPopup(ctk.CTkToplevel):
         except Exception:
             self.copy_tooltip = None
 
+        try:
+            self._recarga_indicator = IndicadorRecargaSalto(self.copy_button)
+        except Exception:
+            self._recarga_indicator = None
+
+        # store original colors so we can restore after gold
+        try:
+            if getattr(self, 'copy_button', None) is not None:
+                try:
+                    self._copy_original_fg_color = self.copy_button.cget('fg_color')
+                except Exception:
+                    self._copy_original_fg_color = '#2563EB'
+                try:
+                    self._copy_original_hover_color = self.copy_button.cget('hover_color')
+                except Exception:
+                    self._copy_original_hover_color = '#1D4ED8'
+        except Exception:
+            self._copy_original_fg_color = self._copy_original_fg_color or '#2563EB'
+            self._copy_original_hover_color = self._copy_original_hover_color or '#1D4ED8'
+
         self.timestamp_label = ctk.CTkLabel(
             self.main,
             text=self._formatear_timestamp("personalizado"),
@@ -682,19 +719,44 @@ class ToastPopup(ctk.CTkToplevel):
     def _on_copy_press(self, event):
         if self._closing:
             return "break"
+        # Inicia contador de presión
+        try:
+            self._copy_press_start_ms = int(time.time() * 1000)
+        except Exception:
+            self._copy_press_start_ms = None
 
         self._copy_btn_pressed = True
         self.dragging = False
+        self._start_recarga_updater()
         return "break"
 
     def _on_copy_release(self, event):
+        # Determina duración de la presión en ms
+        duration_ms = 0
+        try:
+            if self._copy_press_start_ms is not None:
+                duration_ms = int(time.time() * 1000) - int(self._copy_press_start_ms)
+        except Exception:
+            duration_ms = 0
+
+        # Guarda la duración para que `copiar_mensaje` la utilice
+        self._last_copy_press_duration_ms = max(0, int(duration_ms))
+
         if self._copy_btn_pressed and self._event_inside_widget(event, self.copy_button):
             self.copiar_mensaje()
+
+        self._stop_recarga_updater()
+        self._schedule_recarga_hide()
         self._copy_btn_pressed = False
+        self._copy_press_start_ms = None
         return "break"
 
     def _on_copy_leave(self, event):
+        # Cancelar la cuenta si el cursor sale del botón
         self._copy_btn_pressed = False
+        self._copy_press_start_ms = None
+        self._stop_recarga_updater()
+        self._schedule_recarga_hide()
         return "break"
 
     def copiar_mensaje(self):
@@ -711,28 +773,176 @@ class ToastPopup(ctk.CTkToplevel):
         if self.copy_button is None:
             return
 
-        try:
-            self.copy_button.configure(
-                text=ICONO_COPIADO,
-                width=ANCHO_BOTON_COPIAR,
-                height=ALTO_BOTON_COPIAR
-            )
-            self.after(
-                1200,
-                lambda: self.copy_button.configure(
-                    text=ICONO_COPIAR,
+        def _mostrar_checkmark():
+            try:
+                self.copy_button.configure(
+                    text=ICONO_COPIADO,
                     width=ANCHO_BOTON_COPIAR,
                     height=ALTO_BOTON_COPIAR
-                ) if self.copy_button is not None else None
+                )
+                self.after(
+                    1200,
+                    lambda: self.copy_button.configure(
+                        text=ICONO_COPIAR,
+                        width=ANCHO_BOTON_COPIAR,
+                        height=ALTO_BOTON_COPIAR
+                    ) if self.copy_button is not None else None
+                )
+            except Exception:
+                pass
+
+        try:
+            icono_path = resource_path(os.path.join("res", "clipboard.png"))
+            # Calcular píxeles extra basados en la duración de la presión
+            duracion = getattr(self, "_last_copy_press_duration_ms", 0) or 0
+            extra_px = 0
+            try:
+                if duracion > RECARGA_SALTO_THRESHOLD_MS:
+                    extra_ms = duracion - RECARGA_SALTO_THRESHOLD_MS
+                    extra_px = int(extra_ms // RECARGA_SALTO_RATE_MS_PER_PX)
+                    if extra_px > RECARGA_SALTO_MAX_EXTRA_PX:
+                        extra_px = RECARGA_SALTO_MAX_EXTRA_PX
+            except Exception:
+                extra_px = 0
+
+            def _on_anim_complete():
+                # resetear contador tras completar la animación
+                try:
+                    self._last_copy_press_duration_ms = 0
+                except Exception:
+                    pass
+                self._hide_recarga_indicator()
+                _mostrar_checkmark()
+
+            animacion = AnimacionSaltoMoneda(
+                self.copy_button,
+                icono_path,
+                extra_force_px=extra_px,
+                on_complete=_on_anim_complete
             )
+            animacion.iniciar()
         except Exception:
-            pass
+            _mostrar_checkmark()
+            try:
+                self._last_copy_press_duration_ms = 0
+            except Exception:
+                pass
 
     def _bind_reply_button_events(self):
         self.reply_button.bind("<ButtonPress-1>", self._on_reply_press)
         self.reply_button.bind("<ButtonRelease-1>", self._on_reply_release)
         self.reply_button.bind("<B1-Motion>", self._stop_interactive_drag)
         self.reply_button.bind("<Leave>", self._on_reply_leave)
+
+    def _calcular_extra_px(self, duracion_ms):
+        extra_px = 0
+        try:
+            if duracion_ms > RECARGA_SALTO_THRESHOLD_MS:
+                extra_ms = duracion_ms - RECARGA_SALTO_THRESHOLD_MS
+                extra_px = int(extra_ms // RECARGA_SALTO_RATE_MS_PER_PX)
+                if extra_px > RECARGA_SALTO_MAX_EXTRA_PX:
+                    extra_px = RECARGA_SALTO_MAX_EXTRA_PX
+        except Exception:
+            extra_px = 0
+        return extra_px
+
+    def _update_recarga_label(self):
+        if not self._copy_btn_pressed:
+            return
+
+        duration_ms = 0
+        try:
+            if self._copy_press_start_ms is not None:
+                duration_ms = int(time.time() * 1000) - int(self._copy_press_start_ms)
+        except Exception:
+            duration_ms = 0
+
+        extra_px = self._calcular_extra_px(duration_ms)
+        if self._recarga_indicator is not None:
+            self._recarga_indicator.actualizar(extra_px)
+
+        # Si llegamos al máximo, pinta el botón de dorado y marca el estado
+        try:
+            if extra_px >= RECARGA_SALTO_MAX_EXTRA_PX:
+                if not getattr(self, '_copy_is_gold', False):
+                    try:
+                        if getattr(self, '_copy_original_fg_color', None) is None:
+                            self._copy_original_fg_color = self.copy_button.cget('fg_color')
+                    except Exception:
+                        self._copy_original_fg_color = '#2563EB'
+                    try:
+                        if getattr(self, '_copy_original_hover_color', None) is None:
+                            self._copy_original_hover_color = self.copy_button.cget('hover_color')
+                    except Exception:
+                        self._copy_original_hover_color = '#1D4ED8'
+                    try:
+                        self.copy_button.configure(fg_color="#D4AF37", hover_color="#D4AF37")
+                    except Exception:
+                        pass
+                    self._copy_is_gold = True
+        except Exception:
+            pass
+
+        self._recarga_update_after_id = self.after(50, self._update_recarga_label)
+
+    def _start_recarga_updater(self):
+        self._cancel_recarga_hide()
+        self._stop_recarga_updater()
+        self._update_recarga_label()
+
+    def _stop_recarga_updater(self):
+        if self._recarga_update_after_id is not None:
+            try:
+                self.after_cancel(self._recarga_update_after_id)
+            except Exception:
+                pass
+            self._recarga_update_after_id = None
+
+    def _cancel_recarga_hide(self):
+        if self._recarga_hide_after_id is not None:
+            try:
+                self.after_cancel(self._recarga_hide_after_id)
+            except Exception:
+                pass
+            self._recarga_hide_after_id = None
+
+    def _hide_recarga_indicator(self):
+        if self._recarga_indicator is not None:
+            self._recarga_indicator.ocultar()
+
+        # Restaurar color del botón si estaba dorado
+        try:
+            if getattr(self, '_copy_is_gold', False) and getattr(self, 'copy_button', None) is not None:
+                kw = {}
+                if getattr(self, '_copy_original_fg_color', None) is not None:
+                    kw['fg_color'] = self._copy_original_fg_color
+                if getattr(self, '_copy_original_hover_color', None) is not None:
+                    kw['hover_color'] = self._copy_original_hover_color
+                try:
+                    if kw:
+                        self.copy_button.configure(**kw)
+                except Exception:
+                    pass
+                self._copy_is_gold = False
+        except Exception:
+            pass
+
+        if self._recarga_hide_after_id is not None:
+            try:
+                self.after_cancel(self._recarga_hide_after_id)
+            except Exception:
+                pass
+            self._recarga_hide_after_id = None
+
+    def _schedule_recarga_hide(self):
+        if self._recarga_hide_after_id is not None:
+            try:
+                self.after_cancel(self._recarga_hide_after_id)
+            except Exception:
+                pass
+            self._recarga_hide_after_id = None
+
+        self._recarga_hide_after_id = self.after(2000, self._hide_recarga_indicator)
 
     def _actualizar_estado_enviar(self, *args):
         if self.send_button is None or self.reply_entry is None:
@@ -1014,4 +1224,10 @@ class ToastPopup(ctk.CTkToplevel):
         except Exception:
             pass
 
-        setattr(self, attr_name, None)
+    def destroy(self):
+        self._stop_recarga_updater()
+        self._hide_recarga_indicator()
+        try:
+            super().destroy()
+        except Exception:
+            pass
