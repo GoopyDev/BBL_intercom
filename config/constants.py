@@ -6,14 +6,69 @@ APP_ICON = os.path.join("res", "BBL_Chat.ico")
 
 # Configuracion visual y funcional de los botones rapidos.
 # Asegurate de tener estas imagenes en tu carpeta /res.
+IMAGEN_DEFAULT_SUB_MENU = "snacks.png"
+
+# Configuracion global reutilizable para submenus de respuestas rapidas.
+# Para agregar imagenes especificas, usa "image" en el item o
+# "category_image" en una categoria. Todos los nombres apuntan a /res.
+SUB_MENUS_RESPUESTAS_RAPIDAS = {
+    "snacks": {
+        "default_image": IMAGEN_DEFAULT_SUB_MENU,
+        "items": [
+            {
+                "label": "Barritas Zafran",
+                "category_image": "snacks.png",
+                "items": [
+                    {"label": "Cacao"},
+                    {"label": "Arandanos"},
+                    {"label": "Manzana"},
+                    {"label": "Zapallo"},
+                    {"label": "Coco"}
+                ]
+            },
+            {"label": "Barritas Johnny's Market", "category_image": "snacks.png"},
+            {
+                "label": "Alfajor Meltaim",
+                "category_image": "snacks.png",
+                "items": [
+                    {"label": "Marroc"},
+                    {"label": "Naranja con chocolate"},
+                    {"label": "Frutilla"},
+                    {"label": "Avena y pasta de mani"},
+                    {"label": "Coco & Cream"},
+                    {"label": "Frutos rojos"},
+                    {"label": "Cacao & pasta de mani"},
+                    {"label": "Limon"}
+                ]
+            },
+            {"label": "Alfajor Alfaraw (datiles)", "category_image": "snacks.png"},
+            {
+                "label": "Alfajor Animal Kind",
+                "category_image": "snacks.png",
+                "items": [
+                    {"label": "Pasta de mani"},
+                    {"label": "Pasta de mani banado"},
+                    {"label": "Limon"},
+                    {"label": "Limon banado"},
+                    {"label": "Choconut"}
+                ]
+            },
+            {"label": "Pochoclos", "category_image": "snacks.png"},
+            {"label": "Chips Almadre", "category_image": "snacks.png"},
+            {"label": "Turron", "category_image": "snacks.png"}
+        ]
+    }
+}
+
 BOTONES_PRESET = [
-    {"texto": "Ayuda en Barra",   "color": "#E74C3C", "hover": "#6F251D", "img": "ayuda_btn.png"   },
-    {"texto": "Snacks!",          "color": "#F1C40F", "hover": "#8A700A", "img": "snacks_btn.png"  },
-    {"texto": "Hora del café",    "color": "#3498DB", "hover": "#1C5377", "img": "cafe_btn.png"    },
-    {"texto": "Consulta urgente", "color": "#8E44AD", "hover": "#522764", "img": "urgente_btn.png" },
-    {"texto": "A comer...!",      "color": "#D35400", "hover": "#7B3100", "img": "comida_btn.png"  },
-    {"texto": "Hay facturas!",    "color": "#2ECC71", "hover": "#1B7641", "img": "facturas_btn.png"}
+    {"texto": "Ayuda en Barra",    "color": "#E74C3C", "hover": "#6F251D", "img": "ayuda_btn.png",   "sub_menu_activado": False, "sub_menu": None},
+    {"texto": "Snacks!",           "color": "#F1C40F", "hover": "#8A700A", "img": "snacks_btn.png",  "sub_menu_activado": True,  "sub_menu": "snacks"},
+    {"texto": "Hora del caf\u00e9","color": "#3498DB", "hover": "#1C5377", "img": "cafe_btn.png",    "sub_menu_activado": False, "sub_menu": None},
+    {"texto": "Consulta urgente",  "color": "#8E44AD", "hover": "#522764", "img": "urgente_btn.png", "sub_menu_activado": False, "sub_menu": None},
+    {"texto": "A comer...!",       "color": "#D35400", "hover": "#7B3100", "img": "comida_btn.png",  "sub_menu_activado": False, "sub_menu": None},
+    {"texto": "Hay facturas!",     "color": "#2ECC71", "hover": "#1B7641", "img": "facturas_btn.png","sub_menu_activado": False, "sub_menu": None}
 ]
+
 
 def _tema_colores(pares):
     colores = {}
@@ -92,7 +147,7 @@ FONDOS_POPUP = {
         "snacks.png",
     ],
 
-    "Hora del café": [
+    "Hora del caf\u00e9": [
         "cafe.png",
     ],
 

@@ -1,5 +1,6 @@
 import datetime
 import os
+import tkinter as tk
 
 import customtkinter as ctk
 import time
@@ -7,6 +8,7 @@ from PIL import Image, ImageEnhance, ImageOps
 
 from config.constants import BOTONES_PRESET, FONDOS_POPUP
 from utils.resources import resource_path
+from ui.quick_reply_image_popup import QuickReplyImagePopup
 from ui.coin_jump_animation import (
     AnimacionSaltoMoneda,
     IndicadorRecargaSalto,
@@ -78,7 +80,7 @@ class ToastPopup(ctk.CTkToplevel):
     ultima_posicion = None
     contador_posicion = 0
 
-    def __init__(self, master, remitente, mensaje, on_reply=None):
+    def __init__(self, master, remitente, mensaje, on_reply=None, available_destinations=None):
         super().__init__(master)
 
         self.mensaje_data = self._normalizar_mensaje(remitente, mensaje)
@@ -86,6 +88,20 @@ class ToastPopup(ctk.CTkToplevel):
         self.remitente = self.mensaje_data["from_alias"] or remitente
         self.on_reply = on_reply
         self.es_mensaje_rapido = self.mensaje_texto in MENSAJES_RAPIDOS and not self.mensaje_data.get("reply_to")
+        self.quick_reply_submenu = self.mensaje_data.get("quick_reply_submenu")
+        self.destinatarios = self.mensaje_data.get("to") or []
+        respuesta_original = self.mensaje_data.get("reply_to") or {}
+        if not self.destinatarios and isinstance(respuesta_original.get("to"), list):
+            self.destinatarios = respuesta_original["to"]
+        self.available_destinations = list(available_destinations or [])
+        self._destinatario_aliases = {
+            str(item.get("hostname")).strip().upper(): item.get("alias") or item.get("hostname")
+            for item in self.available_destinations
+            if isinstance(item, dict) and item.get("hostname")
+        }
+        self.reply_destinations = None
+        self.reply_is_forward = False
+        self._reply_menu = None
 
         self.width = 360
         self.height = ALTO_NOTIFICACION if self.es_mensaje_rapido else ALTO_NOTIFICACION + 50
@@ -135,6 +151,10 @@ class ToastPopup(ctk.CTkToplevel):
             height=self.height
         )
         self.main.place(x=0, y=0)
+        self.bind("<Button-2>", self._on_middle_click)
+        self.bind("<ButtonPress-2>", self._on_middle_click)
+        self.main.bind("<Button-2>", self._on_middle_click)
+        self.main.bind("<ButtonPress-2>", self._on_middle_click)
         self._bind_drag(self)
         self._bind_drag(self.main)
 
@@ -165,6 +185,7 @@ class ToastPopup(ctk.CTkToplevel):
         self.reply_error_after_id = None
         self.send_button = None
         self.quick_reply_image = None
+        self.quick_reply_image_popup = None
         self._reply_btn_pressed = False
 
         fondo = obtener_fondo_popup(self.mensaje_texto)
@@ -195,10 +216,14 @@ class ToastPopup(ctk.CTkToplevel):
         if self.bg_label is not None:
             self.bg_label.lift()
         self.title_label.lift()
+        if getattr(self, "destinatarios_label", None) is not None:
+            self.destinatarios_label.lift()
         if self.scroll_frame is not None:
             self.scroll_frame.lift()
         if self.reply_button is not None:
             self.reply_button.lift()
+        if getattr(self, "reply_menu_button", None) is not None:
+            self.reply_menu_button.lift()
         if self.reply_frame is not None:
             self.reply_frame.lift()
         self.msg_label.lift()
@@ -206,6 +231,7 @@ class ToastPopup(ctk.CTkToplevel):
             self.timestamp_label.lift()
         self.close_btn.lift()
 
+        self._mostrar_imagen_submenu_si_corresponde()
         self.fade_in()
 
     def _normalizar_mensaje(self, remitente, mensaje):
@@ -215,8 +241,10 @@ class ToastPopup(ctk.CTkToplevel):
                 "from_hostname": mensaje.get("from_hostname"),
                 "from_alias": mensaje.get("from_alias") or remitente,
                 "text": mensaje.get("text") or "",
+                "to": mensaje.get("to") if isinstance(mensaje.get("to"), list) else [],
                 "created_at": mensaje.get("created_at"),
-                "reply_to": mensaje.get("reply_to") if isinstance(mensaje.get("reply_to"), dict) else None
+                "reply_to": mensaje.get("reply_to") if isinstance(mensaje.get("reply_to"), dict) else None,
+                "quick_reply_submenu": mensaje.get("quick_reply_submenu") if isinstance(mensaje.get("quick_reply_submenu"), dict) else None
             }
 
         return {
@@ -224,9 +252,25 @@ class ToastPopup(ctk.CTkToplevel):
             "from_hostname": None,
             "from_alias": remitente,
             "text": mensaje,
+            "to": [],
             "created_at": None,
-            "reply_to": None
+            "reply_to": None,
+            "quick_reply_submenu": None
         }
+
+    def _mostrar_imagen_submenu_si_corresponde(self):
+        if not self.es_mensaje_rapido or not isinstance(self.quick_reply_submenu, dict):
+            return
+
+        try:
+            self.quick_reply_image_popup = QuickReplyImagePopup(
+                self.master,
+                self.quick_reply_submenu,
+                self
+            )
+        except Exception as e:
+            print(f"Error mostrando imagen de submenu: {e}")
+            self.quick_reply_image_popup = None
 
     def _crear_fondo(self, fondo):
         try:
@@ -267,6 +311,44 @@ class ToastPopup(ctk.CTkToplevel):
 
         return f"{dt.strftime('%d/%m/%Y')}\n{dt.strftime('%H:%M')}"
 
+    def _crear_label_destinatarios(self, x, y):
+        contenedor = ctk.CTkFrame(
+            self.main,
+            width=64,
+            height=28,
+            fg_color=("#EEF2F7", "#1F2937"),
+            corner_radius=8,
+            border_width=1,
+            border_color=("#CBD5E1", "#374151")
+        )
+        contenedor.place(x=x, y=y)
+        contenedor.bind("<ButtonPress-1>", self._stop_interactive_drag)
+        contenedor.bind("<B1-Motion>", self._stop_interactive_drag)
+        contenedor.bind("<ButtonRelease-1>", self._stop_interactive_drag)
+        label = ctk.CTkLabel(
+            contenedor,
+            text="Para 🛈",
+            font=("Segoe UI", 11, "bold"),
+            anchor="center",
+            fg_color="transparent",
+            text_color=("#1F2933", "#F8FAFC"),
+            height=30
+        )
+        label.pack(fill="both", expand=True, padx=5)
+        try:
+            self.destinatarios_tooltip = Tooltip(
+                contenedor,
+                self._texto_destinatarios(),
+                position="above",
+                offset_y=6,
+                scrollable=True,
+                max_width=280,
+                max_height=160
+            )
+        except Exception:
+            self.destinatarios_tooltip = None
+        return contenedor
+
     def _crear_contenido_rapido(self, remitente, mensaje):
         self.title_label = ctk.CTkLabel(
             self.main,
@@ -284,6 +366,9 @@ class ToastPopup(ctk.CTkToplevel):
         )
         self._bind_drag(self.title_label)
 
+        self.destinatarios_label = self._crear_label_destinatarios(18, 14)
+        self._crear_acciones_respuesta(92, 14, 100)
+
         self.msg_label = ctk.CTkLabel(
             self.main,
             text=mensaje,
@@ -298,15 +383,6 @@ class ToastPopup(ctk.CTkToplevel):
         )
         self.msg_label.place(x=POSICION_MENSAJE_RAPIDO["x"], y=POSICION_MENSAJE_RAPIDO["y"])
         self._bind_drag(self.msg_label)
-
-        self.reply_button = ctk.CTkButton(
-            self.main,
-            text="Responder",
-            width=100,
-            height=28
-        )
-        self.reply_button.place(x=18, y=14)
-        self._bind_reply_button_events()
 
         self.timestamp_label = ctk.CTkLabel(
             self.main,
@@ -327,6 +403,7 @@ class ToastPopup(ctk.CTkToplevel):
 
         if not self.mensaje_data.get("from_hostname") or self.on_reply is None:
             self.reply_button.configure(state="disabled", text="Sin respuesta")
+            self.reply_menu_button.configure(state="disabled")
 
     def _crear_contenido_personalizado(self):
         self.title_label = ctk.CTkLabel(
@@ -334,12 +411,14 @@ class ToastPopup(ctk.CTkToplevel):
             text=self.remitente,
             font=("Consolas", 14, "bold"),
             anchor="w",
-            width=275,
+            width=180,
             height=1,
             text_color=COLOR_POPUP_TEXTO
         )
         self.title_label.place(x=18, y=14)
         self._bind_drag(self.title_label)
+        self.destinatarios_label = self._crear_label_destinatarios(210, 10)
+        self._crear_acciones_respuesta(18, 220, 110)
 
         self.contenedor_limite = ctk.CTkFrame(
             self.main,
@@ -405,15 +484,6 @@ class ToastPopup(ctk.CTkToplevel):
         self.msg_label.bind("<ButtonRelease-1>", self._stop_text_input_drag)
         self.msg_label.bind("<Key>", self._on_message_text_key)
 
-        self.reply_button = ctk.CTkButton(
-            self.main,
-            text="Responder",
-            width=110,
-            height=30
-        )
-        self.reply_button.place(x=18, y=220)
-        self._bind_reply_button_events()
-
         self.copy_button = ctk.CTkButton(
             self.main,
             text=ICONO_COPIAR,
@@ -425,7 +495,7 @@ class ToastPopup(ctk.CTkToplevel):
             text_color="#FFFFFF",
             corner_radius=8
         )
-        self.copy_button.place(x=140, y=220)
+        self.copy_button.place(x=164, y=220)
         self.copy_button.bind("<ButtonPress-1>", self._on_copy_press)
         self.copy_button.bind("<ButtonRelease-1>", self._on_copy_release)
         self.copy_button.bind("<B1-Motion>", self._stop_interactive_drag)
@@ -474,6 +544,7 @@ class ToastPopup(ctk.CTkToplevel):
 
         if not self.mensaje_data.get("from_hostname") or self.on_reply is None:
             self.reply_button.configure(state="disabled", text="Sin respuesta")
+            self.reply_menu_button.configure(state="disabled")
 
     def mostrar_respuesta(self):
         if self.reply_frame is not None:
@@ -834,6 +905,160 @@ class ToastPopup(ctk.CTkToplevel):
         self.reply_button.bind("<B1-Motion>", self._stop_interactive_drag)
         self.reply_button.bind("<Leave>", self._on_reply_leave)
 
+    def _texto_destinatarios(self):
+        if not self.destinatarios:
+            return "No informado"
+
+        filas = [
+            (
+                self._obtener_alias_destinatario(hostname),
+                hostname
+            )
+            for hostname in self.destinatarios
+        ]
+        ancho_alias = max(len(alias) for alias, _ in filas)
+        return "\n".join(
+            f"{alias:<{ancho_alias}}  {hostname}"
+            for alias, hostname in filas
+        )
+
+    def _obtener_alias_destinatario(self, hostname):
+        clave = str(hostname).strip().upper()
+        alias = self._destinatario_aliases.get(clave)
+        if alias and str(alias).strip().upper() != clave:
+            return str(alias).strip()
+
+        try:
+            resolver = getattr(self.master, "obtener_alias_equipo", None)
+            if callable(resolver):
+                alias = resolver(hostname)
+                if alias and str(alias).strip().upper() != clave:
+                    return str(alias).strip()
+        except Exception:
+            pass
+
+        return str(hostname).strip()
+
+    def _crear_acciones_respuesta(self, x, y, width):
+        self.reply_button = ctk.CTkButton(self.main, text="Responder", width=width, height=30)
+        self.reply_button.place(x=x, y=y)
+        self._bind_reply_button_events()
+        self.reply_menu_button = ctk.CTkButton(
+            self.main,
+            text="▼",
+            width=30,
+            height=30,
+            fg_color=self.reply_button.cget("fg_color"),
+            hover_color=self.reply_button.cget("hover_color")
+        )
+        self.reply_menu_button.place(x=x + width - 1, y=y)
+        self.reply_menu_button.configure(command=self._abrir_menu_acciones)
+        self.reply_menu_button.lift()
+
+    def _abrir_menu_acciones(self):
+        if self._reply_menu is not None:
+            try:
+                self._reply_menu.unpost()
+            except Exception:
+                pass
+            self._reply_menu = None
+
+        menu = tk.Menu(self, tearoff=0, bg="#1F2937", fg="#F8FAFC", activebackground="#374151", activeforeground="#FFFFFF")
+        opciones = []
+        if len(self.destinatarios) > 1:
+            opciones.append("Responder a todos")
+        opciones.append("Reenviar")
+
+        for item in opciones:
+            label = item
+            if label == "Responder a todos":
+                menu.add_command(label=label, command=lambda lbl=label: self._elegir_accion(lbl))
+            else:
+                menu.add_command(label=label, command=lambda lbl=label: self._elegir_accion(lbl))
+
+        self._reply_menu = menu
+        x = self.reply_menu_button.winfo_rootx()
+        y = self.reply_menu_button.winfo_rooty() + self.reply_menu_button.winfo_height()
+        menu.post(x, y)
+
+    def _elegir_accion(self, accion):
+        if self._reply_menu is not None:
+            try:
+                self._reply_menu.unpost()
+            except Exception:
+                pass
+            self._reply_menu = None
+
+        remitente = self.mensaje_data.get("from_hostname")
+        if accion == "Responder a todos":
+            self.reply_destinations = list(dict.fromkeys([remitente] + [d for d in self.destinatarios if d and d != self.mensaje_data.get("from_hostname")]))
+            self.reply_is_forward = False
+            self.lift()
+            self.focus_force()
+            self.mostrar_respuesta()
+            return
+
+        if accion == "Reenviar":
+            self._abrir_selector_forward()
+            return
+
+        self.reply_destinations = [remitente] if remitente else []
+        self.reply_is_forward = False
+        self.mostrar_respuesta()
+
+    def _abrir_selector_forward(self):
+        candidatos = []
+        for item in self.available_destinations:
+            if isinstance(item, dict):
+                hostname = item.get("hostname") or item.get("name")
+                label = item.get("label") or hostname or ""
+            else:
+                hostname = item
+                label = item
+            if hostname and hostname != self.mensaje_data.get("from_hostname"):
+                candidatos.append((hostname, label))
+
+        if not candidatos:
+            candidatos = [(self.mensaje_data.get("from_hostname"), self.mensaje_data.get("from_alias") or self.mensaje_data.get("from_hostname"))]
+
+        selector = ctk.CTkToplevel(self)
+        selector.title("Reenviar a")
+        selector.geometry("300x280")
+        selector.transient(self)
+        selector.update_idletasks()
+        popup_x = self.winfo_rootx()
+        popup_y = self.winfo_rooty()
+        popup_width = self.winfo_width()
+        popup_height = self.winfo_height()
+        selector_width = selector.winfo_width()
+        selector_height = selector.winfo_height()
+        selector_x = popup_x + max(0, (popup_width - selector_width) // 2)
+        selector_y = popup_y + max(0, (popup_height - selector_height) // 2)
+        selector.geometry(f"{selector_width}x{selector_height}+{selector_x}+{selector_y}")
+        selector.lift()
+        selector.focus_force()
+        selector.grab_set()
+        ctk.CTkLabel(selector, text="Seleccioná destinatarios").pack(pady=(14, 8))
+        variables = {}
+        for hostname, label in sorted(set(candidatos), key=lambda item: item[1].lower()):
+            variable = ctk.BooleanVar(value=False)
+            variables[hostname] = variable
+            ctk.CTkCheckBox(selector, text=label, variable=variable).pack(anchor="w", padx=24, pady=2)
+
+        def confirmar():
+            destinos = [hostname for hostname, variable in variables.items() if variable.get()]
+            if not destinos:
+                selector.grab_release()
+                selector.destroy()
+                return
+            self.reply_destinations = destinos
+            self.reply_is_forward = True
+            selector.grab_release()
+            selector.destroy()
+            self.mostrar_respuesta()
+
+        ctk.CTkButton(selector, text="Continuar", command=confirmar).pack(pady=16)
+
     def _calcular_extra_px(self, duracion_ms):
         extra_px = 0
         try:
@@ -982,6 +1207,12 @@ class ToastPopup(ctk.CTkToplevel):
         if self.reply_error_label is not None:
             self.reply_error_label.place_forget()
 
+    def _on_middle_click(self, event=None):
+        if self._closing:
+            return "break"
+        self.close_animation()
+        return "break"
+
     def _on_close_press(self, event):
         if self._closing:
             return "break"
@@ -1062,7 +1293,7 @@ class ToastPopup(ctk.CTkToplevel):
             self._mostrar_error_respuesta_vacia()
             return
 
-        self.on_reply(self.mensaje_data, texto)
+        self.on_reply(self.mensaje_data, texto, self.reply_destinations, self.reply_is_forward)
         self.close_animation()
 
     def _respuesta_tiene_texto(self):
@@ -1102,7 +1333,8 @@ class ToastPopup(ctk.CTkToplevel):
             getattr(self, "reply_preview", None),
             getattr(self, "message_reply_preview", None),
             getattr(self, "msg_text_widget", None),
-            getattr(self, "copy_button", None)
+            getattr(self, "copy_button", None),
+            getattr(self, "destinatarios_label", None)
         ]
 
         return any(
@@ -1193,8 +1425,23 @@ class ToastPopup(ctk.CTkToplevel):
 
         self._closing = True
         self.dragging = False
+        self._cerrar_imagen_submenu()
         self._cancel_after("_fade_after_id")
         self._animate_close()
+
+    def _cerrar_imagen_submenu(self):
+        popup = getattr(self, "quick_reply_image_popup", None)
+        if popup is None:
+            return
+
+        try:
+            popup.close_animation()
+        except Exception:
+            try:
+                popup.destroy()
+            except Exception:
+                pass
+        self.quick_reply_image_popup = None
 
     def _animate_close(self):
         self._close_after_id = None
@@ -1227,6 +1474,7 @@ class ToastPopup(ctk.CTkToplevel):
     def destroy(self):
         self._stop_recarga_updater()
         self._hide_recarga_indicator()
+        self._cerrar_imagen_submenu()
         try:
             super().destroy()
         except Exception:

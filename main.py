@@ -4,6 +4,27 @@ import sys
 
 import customtkinter as ctk
 
+RUTA_ICONO = os.path.abspath(os.path.join(os.path.dirname(__file__), "res", "BBL_Chat.ico"))
+
+# Todas las ventanas secundarias CTk reciben el icono desde este punto de entrada.
+_original_toplevel_init = ctk.CTkToplevel.__init__
+
+
+def _patched_toplevel_init(self, *args, **kwargs):
+    _original_toplevel_init(self, *args, **kwargs)
+    if os.path.exists(RUTA_ICONO):
+        def aplicar_icono_personalizado():
+            if self.winfo_exists():
+                self.iconbitmap(RUTA_ICONO)
+
+        # CustomTkinter reaplica su icono por defecto a los 200 ms.
+        self.after(10, aplicar_icono_personalizado)
+        self.after(202, aplicar_icono_personalizado)
+        self.after(250, aplicar_icono_personalizado)
+
+
+ctk.CTkToplevel.__init__ = _patched_toplevel_init
+
 from ui.already_running_dialog import AlreadyRunningDialog
 from ui.main_window import ITMessenger
 from ui.splash_screen import SplashScreen
@@ -29,7 +50,7 @@ def cargar_ventana_guardada():
 
 
 SPLASH_GIF_PATH = os.path.join("res", "TechDance.gif")
-SPLASH_PLAYBACK_SPEED = 2.3  # 1.0 = velocidad normal, 2.0 = 2x rápido, 0.5 = mitad de velocidad
+SPLASH_PLAYBACK_SPEED = 4 #2.3  # 1.0 = velocidad normal, 2.0 = 2x rápido, 0.5 = mitad de velocidad
 SPLASH_TARGET_SIZE = (333, 400)  # Ej: (640, 360) para forzar un tamaño fijo; None usa el tamaño original del GIF
 
 

@@ -1,4 +1,5 @@
 import ctypes
+import datetime
 import json
 import os
 import re
@@ -12,13 +13,26 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 from PIL import Image, ImageOps
 
-from config.constants import APP_ICON, APP_ID, BOTONES_PRESET, TEMAS_PREDEFINIDOS
+from config.constants import APP_ICON, APP_ID, BOTONES_PRESET, SUB_MENUS_RESPUESTAS_RAPIDAS, TEMAS_PREDEFINIDOS
 from services.message_service import enviar_mensaje, es_destino_valido, obtener_destinos, revisar_mensajes_pendientes
 from services.observer_service import detener_observer, iniciar_observer
+from services.history_service import MessageHistory
 from services.profile_service import actualizar_profile_equipo, obtener_alias_equipo
 from ui.toast_popup import ToastPopup
+from ui.quick_reply_dropdown import QuickReplySplitButton
+from ui.old_messages_window import OldMessagesWindow
+from ui.tooltip import Tooltip
 from utils.resources import resource_path
 from widgets.message_textbox import MessageTextBox
+
+
+# Parametros editables del dialogo de cambio de alias.
+ALIAS_DIALOG_WIDTH = 350
+ALIAS_DIALOG_HEIGHT = 200
+ALIAS_DIALOG_LABEL_HEIGHT = 32
+ALIAS_DIALOG_LABEL_TOP_PADDING = 30
+ALIAS_DIALOG_LABEL_BOTTOM_PADDING = 0
+ALIAS_DIALOG_ENTRY_TOP_PADDING = 0
 
 
 # Esto le dice a Windows que trate a este proceso como una aplicacion con identidad propia.
@@ -47,6 +61,7 @@ class ITMessenger(ctk.CTk):
         self.banner_top_image = None
         self.banner_top_label = None
         self.btn_reiniciar = None
+        self.btn_configuracion = None
         self.btn_enviar_personalizado = None
         self.tema_tipo = "predefinido"
         self.tema_id = "darkclassic"
@@ -64,6 +79,10 @@ class ITMessenger(ctk.CTk):
         self.reinicio_bg_pil_image = None
         self.ruta_log_reinicio = os.path.join(os.path.dirname(self.ruta_config), "IT_Messenger_Config.log")
         self.ventana_config = {}
+        self.mensaje_antiguo_horas = 4
+        self.history = MessageHistory(os.environ["APPDATA"])
+        self.mensajes_anteriores_sesion = []
+        self.mensajes_anteriores_window = None
         self.ultima_geometria_normal = {
             "x": 100,
             "y": 100,
@@ -150,6 +169,10 @@ class ITMessenger(ctk.CTk):
                 ventana = data.get("ventana", {})
                 if isinstance(ventana, dict):
                     self.ventana_config = ventana
+                try:
+                    self.mensaje_antiguo_horas = max(1, min(48, int(data.get("mensaje_antiguo_horas", 4))))
+                except (TypeError, ValueError):
+                    self.mensaje_antiguo_horas = 4
             self.actualizar_profile_equipo()
 
     def setup_ui(self):
@@ -481,6 +504,7 @@ class ITMessenger(ctk.CTk):
                     "tipo": self.tema_tipo,
                     "id": self.tema_id
                 },
+                "mensaje_antiguo_horas": self.mensaje_antiguo_horas,
                 "ventana": self.obtener_config_ventana_actual()
             }, f)
 
@@ -599,7 +623,9 @@ class ITMessenger(ctk.CTk):
             text="Nuevo alias:",
             title="Editar alias"
         )
-        dialog.after(50, lambda: self.precargar_alias_dialog(dialog, alias_actual))
+        dialog.after(10, lambda: self.precargar_alias_dialog(dialog, alias_actual))
+        dialog.after(20, lambda: self._configurar_dialogo_alias(dialog))
+        dialog.after(220, lambda: self._configurar_dialogo_alias(dialog))
         nuevo_alias = dialog.get_input()
 
         if nuevo_alias is None:
@@ -610,6 +636,8 @@ class ITMessenger(ctk.CTk):
             nuevo_alias = self.hostname
 
         self.alias = nuevo_alias
+
+
         self.btn_alias.configure(text=self.alias)
         self.guardar_config()
         self.actualizar_profile_equipo()
@@ -620,6 +648,108 @@ class ITMessenger(ctk.CTk):
             dialog._entry.insert(0, alias_actual)
             dialog._entry.select_range(0, "end")
             dialog._entry.icursor("end")
+        except Exception:
+            pass
+
+    # def _configurar_dialogo_alias(self, dialog):
+    #     try:
+    #         dialog.update_idletasks()
+
+    #         # 1. Ajustar el peso de las filas en la grilla
+    #         dialog.grid_rowconfigure(0, weight=0)  # Label: tamaño fijo
+    #         dialog.grid_rowconfigure(1, weight=1)  # Entry: absorbe todo el espacio sobrante hacia abajo
+    #         dialog.grid_rowconfigure(2, weight=0)  # Botones: se mantienen al fondo
+
+    #         # 2. Configurar el Entry para que se pegue al borde superior (Norte) de su fila expansiva
+    #         if getattr(dialog, "_entry", None) is not None:
+    #             dialog._entry.grid_configure(
+    #                 sticky="ewn",  # ewn = Estirar a los lados (East/West) y pegar Arriba (North)
+    #                 pady=(10, 10)   # 10px exactos por debajo del Label
+    #             )
+
+    #         # 3. Ajustar el margen del Label
+    #         if getattr(dialog, "_label", None) is not None:
+    #             dialog._label.grid_configure(
+    #                 pady=(20, 0)
+    #             )
+
+    #         # 4. Asegurar que los botones tengan su padding inferior contra el borde de la ventana
+    #         # (Si el diálogo tiene un frame interno para botones o los botones directos)
+    #         if hasattr(dialog, "_ok_button") and getattr(dialog, "_ok_button", None) is not None:
+    #             dialog._ok_button.master.grid_configure(pady=(10, 15))
+
+    #         self._centrar_dialogo_sobre_principal(
+    #             dialog,
+    #             ALIAS_DIALOG_WIDTH,
+    #             ALIAS_DIALOG_HEIGHT
+    #         )
+    #     except Exception:
+    #         pass
+    def _configurar_dialogo_alias(self, dialog):
+        try:
+            dialog.update_idletasks()
+            dialog.grid_columnconfigure((0, 1), weight=1)
+            dialog.grid_rowconfigure(0, weight=0)
+            dialog.grid_rowconfigure(1, weight=0)
+            dialog.grid_rowconfigure(2, weight=1)
+            dialog.grid_rowconfigure(3, weight=0)
+
+            if getattr(dialog, "_label", None) is not None:
+                dialog._label.configure(height=ALIAS_DIALOG_LABEL_HEIGHT)
+                dialog._label.grid_configure(
+                    row=0,
+                    sticky="ew",
+                    pady=(ALIAS_DIALOG_LABEL_TOP_PADDING, ALIAS_DIALOG_LABEL_BOTTOM_PADDING)
+                )
+            if getattr(dialog, "_entry", None) is not None:
+                dialog._entry.grid_configure(
+                    row=1,
+                    sticky="ew",
+                    pady=(ALIAS_DIALOG_ENTRY_TOP_PADDING, 20)
+                )
+            if getattr(dialog, "_ok_button", None) is not None:
+                dialog._ok_button.grid_configure(
+                    row=3,
+                    sticky="ew",
+                    pady=(0, 10)
+                )
+            if getattr(dialog, "_cancel_button", None) is not None:
+                dialog._cancel_button.grid_configure(
+                    row=3,
+                    sticky="ew",
+                    pady=(0, 10)
+                )
+            self._centrar_dialogo_sobre_principal(
+                dialog,
+                ALIAS_DIALOG_WIDTH,
+                ALIAS_DIALOG_HEIGHT
+            )
+        except Exception:
+            pass
+
+    def _centrar_dialogo_sobre_principal(self, dialog, width=360, height=190):
+        try:
+            self.update_idletasks()
+            dialog.update_idletasks()
+            x = self.winfo_rootx() + max(0, (self.winfo_width() - width) // 2)
+            y = self.winfo_rooty() + max(0, (self.winfo_height() - height) // 2)
+            native_width = dialog._apply_window_scaling(width)
+            native_height = dialog._apply_window_scaling(height)
+            dialog.tk.call("wm", "resizable", dialog._w, 1, 1)
+            dialog.tk.call("wm", "minsize", dialog._w, native_width, native_height)
+            dialog.tk.call("wm", "maxsize", dialog._w, native_width, native_height)
+            dialog.tk.call("wm", "geometry", dialog._w, f"{native_width}x{native_height}+{x}+{y}")
+            dialog.update_idletasks()
+            decoration_x = dialog.winfo_rootx() - x
+            decoration_y = dialog.winfo_rooty() - y
+            dialog.tk.call(
+                "wm",
+                "geometry",
+                dialog._w,
+                f"{native_width}x{native_height}+{x - decoration_x}+{y - decoration_y}"
+            )
+            dialog.update()
+            dialog.lift()
         except Exception:
             pass
 
@@ -817,12 +947,16 @@ class ITMessenger(ctk.CTk):
 
         for boton, config_boton in self.botones_rapidos:
             color, hover, text_color = self.obtener_colores_boton(config_boton)
-            boton.configure(
-                fg_color=color,
-                hover_color=color,
-                text_color=text_color,
-                border_color=self.obtener_borde_normal_boton_rapido()
-            )
+            border_color = self.obtener_borde_normal_boton_rapido()
+            if hasattr(boton, "set_visual_state"):
+                boton.set_visual_state(color, text_color, border_color)
+            else:
+                boton.configure(
+                    fg_color=color,
+                    hover_color=color,
+                    text_color=text_color,
+                    border_color=border_color
+                )
 
     def oscurecer_color(self, color, factor=0.72):
         """Devuelve una variante mas oscura de un color hexadecimal."""
@@ -881,6 +1015,7 @@ class ITMessenger(ctk.CTk):
             command=self.editar_alias
         )
         self.btn_alias.pack(side="left")
+        Tooltip(self.btn_alias, "Cambia el modo en el que los demás te ven", position="below")
 
         self.chk_inicio_windows = ctk.CTkCheckBox(
             top_p,
@@ -889,6 +1024,11 @@ class ITMessenger(ctk.CTk):
             command=lambda: self.actualizar_inicio_windows(self.startup_enabled_var.get())
         )
         self.chk_inicio_windows.grid(row=0, column=1, sticky="e", padx=(0, 10))
+        Tooltip(
+            self.chk_inicio_windows,
+            "Añade la aplicación a la lista de aplicaciones que se ejecutan al inicio (recomendado!)",
+            position="below"
+        )
 
         tema_p = ctk.CTkFrame(top_p, fg_color="transparent")
         tema_p.grid(row=0, column=2, sticky="e", padx=(0, 10))
@@ -907,24 +1047,31 @@ class ITMessenger(ctk.CTk):
         modo_p.grid(row=0, column=3, sticky="e", padx=(0, 10))
 
         ctk.CTkLabel(modo_p, text="☀", font=("Arial", 16)).pack(side="left", padx=(0, 10))
-        ctk.CTkSwitch(
+        self.modo_switch = ctk.CTkSwitch(
             modo_p,
             text="",
             width=0,
             variable=self.modo_oscuro_var,
             command=self.alternar_modo
-        ).pack(side="left")
+        )
+        self.modo_switch.pack(side="left")
+        Tooltip(self.modo_switch, "Alternar modo claro/oscuro", position="below")
         ctk.CTkLabel(modo_p, text="☾  | ", font=("Arial", 16)).pack(side="left", padx=(0, 0))
 
-        self.btn_reiniciar = ctk.CTkButton(
+        self.btn_configuracion = ctk.CTkButton(
             top_p,
-            text="Volver a registrar ⚙",
-            width=34,
+            text="⚙ Configuración",
+            width=130,
             height=30,
             corner_radius=8,
-            command=self.reiniciar_registro
+            command=self.abrir_configuracion
         )
-        self.btn_reiniciar.grid(row=0, column=4, sticky="e")
+        self.btn_configuracion.grid(row=0, column=4, sticky="e", padx=(6, 0))
+        Tooltip(
+            self.btn_configuracion,
+            "Gestionar preferencias, consultar mensajes anteriores, restablecer...",
+            position="below"
+        )
 
         # PANEL IZQUIERDO: MENSAJES
         left_p = ctk.CTkFrame(self)
@@ -949,28 +1096,54 @@ class ITMessenger(ctk.CTk):
                 img = None
 
             color, hover, text_color = self.obtener_colores_boton(b)
-            btn = ctk.CTkButton(
-                quick_p,
-                text=b["texto"],
-                image=img,
-                fg_color=color,
-                hover=False,
-                hover_color=color,
-                text_color=text_color,
-                border_width=2,
-                border_color=self.obtener_borde_normal_boton_rapido(),
-                height=82,
-                corner_radius=18,
-                anchor="w",
-                font=("Arial", 20, "bold"),
-                compound="left"
-            )
+            submenu_key = b.get("sub_menu")
+            submenu_config = SUB_MENUS_RESPUESTAS_RAPIDAS.get(submenu_key)
+
+            if b.get("sub_menu_activado") and submenu_config:
+                btn = QuickReplySplitButton(
+                    quick_p,
+                    text=b["texto"],
+                    image=img,
+                    submenu_config=submenu_config,
+                    command=lambda texto=b["texto"]: self.enviar_rapido(texto),
+                    submenu_command=lambda item, config=b: self.enviar_rapido_con_submenu(config, item),
+                    fg_color=color,
+                    text_color=text_color,
+                    border_width=2,
+                    border_color=self.obtener_borde_normal_boton_rapido(),
+                    height=82,
+                    corner_radius=18,
+                    font=("Arial", 20, "bold")
+                )
+            else:
+                btn = ctk.CTkButton(
+                    quick_p,
+                    text=b["texto"],
+                    image=img,
+                    fg_color=color,
+                    hover=False,
+                    hover_color=color,
+                    text_color=text_color,
+                    border_width=2,
+                    border_color=self.obtener_borde_normal_boton_rapido(),
+                    height=82,
+                    corner_radius=18,
+                    anchor="w",
+                    font=("Arial", 20, "bold"),
+                    compound="left"
+                )
             btn.pack(pady=5, fill="x", padx=6)
             self.botones_rapidos.append((btn, b))
-            btn.bind("<Enter>", lambda event, boton=btn, config=b: self.activar_hover_boton(boton, config))
-            btn.bind("<Leave>", lambda event, boton=btn, config=b: self.desactivar_hover_boton(boton, config))
-            btn.bind("<ButtonPress-1>", lambda event, boton=btn, config=b: self.iniciar_click_rapido(boton, config))
-            btn.bind("<ButtonRelease-1>", lambda event, boton=btn, config=b: self.finalizar_click_rapido(event, boton, config))
+            if isinstance(btn, QuickReplySplitButton):
+                btn.set_hover_handlers(
+                    lambda event, boton=btn, config=b: self.activar_hover_boton(boton, config),
+                    lambda event, boton=btn, config=b: self.desactivar_hover_boton(boton, config)
+                )
+            else:
+                btn.bind("<Enter>", lambda event, boton=btn, config=b: self.activar_hover_boton(boton, config))
+                btn.bind("<Leave>", lambda event, boton=btn, config=b: self.desactivar_hover_boton(boton, config))
+                btn.bind("<ButtonPress-1>", lambda event, boton=btn, config=b: self.iniciar_click_rapido(boton, config))
+                btn.bind("<ButtonRelease-1>", lambda event, boton=btn, config=b: self.finalizar_click_rapido(event, boton, config))
 
         custom_p = ctk.CTkFrame(left_p, fg_color="transparent")
         custom_p.pack(fill="x", padx=24, pady=(8, 12))
@@ -1085,8 +1258,10 @@ class ITMessenger(ctk.CTk):
             text_color=text_color,
             border_color=border_color
         )
+        if hasattr(boton, "set_visual_state"):
+            boton.set_visual_state(fg_color, text_color, border_color)
 
-    def enviar(self, texto):
+    def enviar(self, texto, quick_reply_submenu=None):
         """Envia un mensaje rapido o personalizado a los destinatarios elegidos."""
         if not self.ruta_teams:
             return False
@@ -1097,13 +1272,39 @@ class ITMessenger(ctk.CTk):
             messagebox.showinfo("Info", "Seleccioná al menos un destinatario.")
             return False
 
-        enviar_mensaje(self.ruta_teams, self.hostname, self.alias, destinos, texto)
+        enviar_mensaje(
+            self.ruta_teams,
+            self.hostname,
+            self.alias,
+            destinos,
+            texto,
+            quick_reply_submenu=quick_reply_submenu
+        )
         return True
 
     def enviar_rapido(self, texto):
         """Envia un mensaje rapido y muestra una confirmacion visual al usuario."""
         if self.enviar(texto):
             self.mostrar_confirmacion_envio(f"✅ Mensaje enviado: {texto}")
+
+    def enviar_rapido_con_submenu(self, config_boton, item_submenu):
+        """Envia un mensaje rapido conservando la seleccion del submenu."""
+        submenu_key = config_boton.get("sub_menu")
+        submenu_config = SUB_MENUS_RESPUESTAS_RAPIDAS.get(submenu_key, {})
+        item_submenu = item_submenu or {}
+        metadata = {
+            "button_text": config_boton["texto"],
+            "submenu": submenu_key,
+            "label": item_submenu.get("label", ""),
+            "path": item_submenu.get("path", []),
+            "image": item_submenu.get("image"),
+            "category_image": item_submenu.get("category_image"),
+            "default_image": item_submenu.get("default_image") or submenu_config.get("default_image")
+        }
+
+        if self.enviar(config_boton["texto"], quick_reply_submenu=metadata):
+            detalle = metadata["label"] or config_boton["texto"]
+            self.mostrar_confirmacion_envio(f"Mensaje enviado: {config_boton['texto']} - {detalle}")
 
     def mostrar_confirmacion_envio(self, texto):
         """Muestra una barra flotante temporal confirmando el mensaje enviado."""
@@ -1120,6 +1321,106 @@ class ITMessenger(ctk.CTk):
         """Oculta la barra de confirmacion de envio."""
         self.confirmacion_envio.place_forget()
         self.confirmacion_envio_after_id = None
+
+    def abrir_configuracion(self):
+        """Abre la configuracion de antiguedad de mensajes."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Configuracion")
+        dialog.geometry("540x560")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        self.update_idletasks()
+        dialog.update_idletasks()
+        parent_x = self.winfo_rootx()
+        parent_y = self.winfo_rooty()
+        dialog.geometry(f"540x560+{parent_x}+{parent_y}")
+        dialog.update_idletasks()
+        decoration_x = dialog.winfo_rootx() - parent_x
+        decoration_y = dialog.winfo_rooty() - parent_y
+        dialog.geometry(f"540x560+{parent_x - decoration_x}+{parent_y - decoration_y}")
+        dialog.lift()
+        dialog.focus_force()
+
+        dialog.grid_columnconfigure(0, weight=1)
+        dialog.grid_rowconfigure(4, weight=1)
+
+        ctk.CTkLabel(dialog, text="Mensajes antiguos", font=("Arial", 16, "bold")).grid(
+            row=0, column=0, pady=(18, 4)
+        )
+        valor = ctk.IntVar(value=self.mensaje_antiguo_horas)
+        etiqueta = ctk.CTkLabel(dialog, text=f"Considerar antiguo despues de {valor.get()} horas")
+        etiqueta.grid(row=1, column=0, pady=(0, 8))
+
+        def actualizar(valor_desde_slider):
+            horas = int(float(valor_desde_slider))
+            valor.set(horas)
+            etiqueta.configure(text=f"Considerar antiguo despues de {horas} horas")
+
+        ctk.CTkSlider(dialog, from_=1, to=48, number_of_steps=47, variable=valor, command=actualizar).grid(
+            row=2, column=0, sticky="ew", padx=28
+        )
+
+        def guardar():
+            self.mensaje_antiguo_horas = max(1, min(48, valor.get()))
+            self.guardar_config()
+            dialog.destroy()
+
+        historial = ctk.CTkFrame(dialog, fg_color="transparent")
+        historial.grid(row=3, column=0, sticky="ew", padx=28, pady=(18, 10))
+        ctk.CTkButton(
+            historial,
+            text="Mensajes anteriores",
+            width=170,
+            command=self.abrir_mensajes_anteriores
+        ).pack(side="left")
+        ctk.CTkFrame(dialog, height=2, fg_color="#64748B").grid(
+            row=4, column=0, sticky="ew", padx=28, pady=(0, 18)
+        )
+
+        restablecer = ctk.CTkFrame(dialog, fg_color="transparent")
+        restablecer.grid(row=5, column=0, sticky="ew", padx=28)
+        ctk.CTkLabel(restablecer, text="Restablecer", font=("Arial", 16, "bold")).pack(anchor="w")
+        ctk.CTkLabel(
+            restablecer,
+            text=("Si la aplicación no está funcionando correctamente, puedes restablecerla y volver a "
+                  "configurarla presionando el botón a continuación. Podrás colocar un nuevo alias, y "
+                  "seleccionar la carpeta donde se encuentran los buzones del resto del equipo."),
+            justify="left",
+            wraplength=480,
+            anchor="w"
+        ).pack(fill="x", pady=(6, 10))
+        ctk.CTkButton(
+            restablecer,
+            text="Volver a configurar",
+            width=170,
+            fg_color=("#8B3A4A", "#713344"),
+            hover_color=("#A64B5D", "#8A4052"),
+            command=self.reiniciar_registro
+        ).pack(anchor="w")
+        ctk.CTkFrame(dialog, height=2, fg_color="#64748B").grid(
+            row=6, column=0, sticky="ew", padx=28, pady=(18, 0)
+        )
+
+        botones = ctk.CTkFrame(dialog, fg_color="transparent")
+        botones.grid(row=7, column=0, sticky="sew", padx=28, pady=18)
+        ctk.CTkButton(
+            botones,
+            text="Cancelar",
+            width=100,
+            command=dialog.destroy
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(botones, text="Guardar", width=100, command=guardar).pack(side="left")
+
+    def abrir_mensajes_anteriores(self):
+        """Muestra los mensajes archivados que superan la antiguedad configurada."""
+        if self.mensajes_anteriores_window is not None and self.mensajes_anteriores_window.winfo_exists():
+            self.mensajes_anteriores_window.focus_force()
+            return
+        self.mensajes_anteriores_window = OldMessagesWindow(
+            self,
+            self.mensajes_anteriores_sesion,
+            self.mensaje_antiguo_horas
+        )
 
     def enviar_libre(self):
         """Envia el texto escrito manualmente y limpia el campo."""
@@ -1143,6 +1444,7 @@ class ITMessenger(ctk.CTk):
         botones = [
             getattr(self, "btn_alias", None),
             getattr(self, "btn_reiniciar", None),
+            getattr(self, "btn_configuracion", None),
             getattr(self, "btn_enviar_personalizado", None)
         ]
 
@@ -1220,29 +1522,78 @@ class ITMessenger(ctk.CTk):
             self.on_msg_received,
             self.observer
         )
+        if self.mensajes_anteriores_sesion:
+            self.after_idle(self.abrir_mensajes_anteriores)
 
     def on_msg_received(self, remitente, contenido):
         if not self.ui_principal_lista:
             self.after(250, lambda: self.on_msg_received(remitente, contenido))
             return
 
-        self.after(0, lambda: ToastPopup(self, remitente, contenido, on_reply=self.enviar_respuesta))
+        if isinstance(contenido, dict):
+            self.history.save(remitente, contenido)
+            created_at = self.history.parse_datetime(contenido.get("created_at"))
+            threshold = datetime.datetime.now() - datetime.timedelta(hours=self.mensaje_antiguo_horas)
+            if created_at is not None and created_at <= threshold:
+                if not any(message.get("id") == contenido.get("id") for message in self.mensajes_anteriores_sesion):
+                    self.mensajes_anteriores_sesion.append(contenido)
+                return
 
-    def enviar_respuesta(self, mensaje_original, texto):
-        """Envia una respuesta directa al equipo que genero el mensaje original."""
-        destino = mensaje_original.get("from_hostname") if isinstance(mensaje_original, dict) else None
-        if not destino:
+        self.after(
+            0,
+            lambda: ToastPopup(
+                self,
+                remitente,
+                contenido,
+                on_reply=self.enviar_respuesta,
+                available_destinations=self.obtener_destinos_registrados()
+            )
+        )
+
+    def obtener_destinos_registrados(self):
+        if not self.ruta_teams:
+            return []
+
+        destinos = []
+        for nombre in sorted(os.listdir(self.ruta_teams)):
+            if not es_destino_valido(self.ruta_teams, self.hostname, nombre):
+                continue
+            alias = self.obtener_alias_equipo(nombre)
+            destinos.append({
+                "hostname": nombre,
+                "alias": alias,
+                "label": f"{alias} ({nombre})"
+            })
+        return destinos
+
+    def enviar_respuesta(self, mensaje_original, texto, destinos=None, reenviar=False):
+        """Envia una respuesta o reenvio a los equipos seleccionados."""
+        if not isinstance(mensaje_original, dict):
             return
+
+        destino_origen = mensaje_original.get("from_hostname")
+        destinos = destinos or [destino_origen]
+        if not reenviar:
+            destinos = [destino for destino in destinos if destino != self.hostname]
+        destinos = [destino for destino in destinos if destino]
+        if not destinos:
+            return
+
+        texto_a_enviar = texto
+        if reenviar:
+            original = mensaje_original.get("text") or ""
+            remitente = mensaje_original.get("from_alias") or destino_origen or "mensaje original"
+            texto_a_enviar = f"Reenviado de {remitente}:\n{original}\n\n{texto}".strip()
 
         enviar_mensaje(
             self.ruta_teams,
             self.hostname,
             self.alias,
-            [destino],
-            texto,
-            respuesta_a=mensaje_original
+            destinos,
+            texto_a_enviar,
+            respuesta_a=None if reenviar else mensaje_original
         )
-        self.mostrar_confirmacion_envio("Respuesta enviada")
+        self.mostrar_confirmacion_envio("Mensaje reenviado" if reenviar else "Respuesta enviada")
 
     def detener_observer(self):
         self.observer = detener_observer(self.observer)

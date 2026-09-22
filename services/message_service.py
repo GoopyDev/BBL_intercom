@@ -27,7 +27,7 @@ def obtener_destinos(ruta_teams, hostname, enviar_a_todos, check_vars):
     return [h for h, v in check_vars.items() if v.get() and es_destino_valido(ruta_teams, hostname, h)]
 
 
-def crear_payload_mensaje(hostname, alias, texto, respuesta_a=None):
+def crear_payload_mensaje(hostname, alias, texto, destinatarios=None, respuesta_a=None, quick_reply_submenu=None):
     """Crea el formato enriquecido de mensaje manteniendo el texto como dato principal."""
     payload = {
         "version": 1,
@@ -35,6 +35,7 @@ def crear_payload_mensaje(hostname, alias, texto, respuesta_a=None):
         "from_hostname": hostname,
         "from_alias": alias,
         "text": texto,
+        "to": list(dict.fromkeys(destinatarios or [])),
         "created_at": datetime.datetime.now().isoformat(timespec="seconds")
     }
 
@@ -43,8 +44,12 @@ def crear_payload_mensaje(hostname, alias, texto, respuesta_a=None):
             "id": respuesta_a.get("id"),
             "from_hostname": respuesta_a.get("from_hostname"),
             "from_alias": respuesta_a.get("from_alias") or respuesta_a.get("sender") or "",
-            "text": respuesta_a.get("text") or ""
+            "text": respuesta_a.get("text") or "",
+            "to": respuesta_a.get("to") if isinstance(respuesta_a.get("to"), list) else []
         }
+
+    if isinstance(quick_reply_submenu, dict):
+        payload["quick_reply_submenu"] = quick_reply_submenu
 
     return payload
 
@@ -63,6 +68,7 @@ def parsear_mensaje(remitente_archivo, contenido):
             "from_hostname": None,
             "from_alias": remitente_archivo,
             "text": contenido,
+            "to": [],
             "created_at": None,
             "reply_to": None
         }
@@ -77,17 +83,26 @@ def parsear_mensaje(remitente_archivo, contenido):
         "from_hostname": data.get("from_hostname"),
         "from_alias": data.get("from_alias") or remitente_archivo,
         "text": texto,
+        "to": data.get("to") if isinstance(data.get("to"), list) else [],
         "created_at": data.get("created_at"),
-        "reply_to": data.get("reply_to") if isinstance(data.get("reply_to"), dict) else None
+        "reply_to": data.get("reply_to") if isinstance(data.get("reply_to"), dict) else None,
+        "quick_reply_submenu": data.get("quick_reply_submenu") if isinstance(data.get("quick_reply_submenu"), dict) else None
     }
 
 
-def enviar_mensaje(ruta_teams, hostname, alias, destinos, texto, respuesta_a=None):
+def enviar_mensaje(ruta_teams, hostname, alias, destinos, texto, respuesta_a=None, quick_reply_submenu=None):
     """Escribe un archivo .txt por destinatario en la carpeta compartida."""
     if not ruta_teams:
         return
 
-    payload = crear_payload_mensaje(hostname, alias, texto, respuesta_a)
+    payload = crear_payload_mensaje(
+        hostname,
+        alias,
+        texto,
+        destinos,
+        respuesta_a,
+        quick_reply_submenu
+    )
     contenido = json.dumps(payload, ensure_ascii=False)
 
     for d in destinos:
