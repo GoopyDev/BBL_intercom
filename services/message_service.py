@@ -4,7 +4,7 @@ import os
 import uuid
 
 
-CARPETAS_RESERVADAS = {"Themes"}
+CARPETAS_RESERVADAS = {"Themes", "Categories"}
 
 
 def es_destino_valido(ruta_teams, hostname, nombre):

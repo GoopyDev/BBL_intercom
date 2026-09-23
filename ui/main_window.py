@@ -13,7 +13,8 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 from PIL import Image, ImageOps
 
-from config.constants import APP_ICON, APP_ID, BOTONES_PRESET, SUB_MENUS_RESPUESTAS_RAPIDAS, TEMAS_PREDEFINIDOS
+from config.constants import APP_ICON, APP_ID, BOTONES_PRESET, TEMAS_PREDEFINIDOS
+from services.category_service import cargar_categorias
 from services.message_service import enviar_mensaje, es_destino_valido, obtener_destinos, revisar_mensajes_pendientes
 from services.observer_service import detener_observer, iniciar_observer
 from services.history_service import MessageHistory
@@ -83,6 +84,7 @@ class ITMessenger(ctk.CTk):
         self.history = MessageHistory(os.environ["APPDATA"])
         self.mensajes_anteriores_sesion = []
         self.mensajes_anteriores_window = None
+        self.categorias_respuestas_rapidas = {}
         self.ultima_geometria_normal = {
             "x": 100,
             "y": 100,
@@ -978,6 +980,7 @@ class ITMessenger(ctk.CTk):
             w.destroy()
 
         self.botones_rapidos = []
+        self.categorias_respuestas_rapidas = cargar_categorias(self.ruta_teams)
         self.cargar_temas()
 
         self.grid_columnconfigure(0, weight=7)
@@ -1096,10 +1099,9 @@ class ITMessenger(ctk.CTk):
                 img = None
 
             color, hover, text_color = self.obtener_colores_boton(b)
-            submenu_key = b.get("sub_menu")
-            submenu_config = SUB_MENUS_RESPUESTAS_RAPIDAS.get(submenu_key)
+            submenu_config = self.categorias_respuestas_rapidas.get(b["texto"].casefold())
 
-            if b.get("sub_menu_activado") and submenu_config:
+            if submenu_config:
                 btn = QuickReplySplitButton(
                     quick_p,
                     text=b["texto"],
@@ -1289,17 +1291,15 @@ class ITMessenger(ctk.CTk):
 
     def enviar_rapido_con_submenu(self, config_boton, item_submenu):
         """Envia un mensaje rapido conservando la seleccion del submenu."""
-        submenu_key = config_boton.get("sub_menu")
-        submenu_config = SUB_MENUS_RESPUESTAS_RAPIDAS.get(submenu_key, {})
         item_submenu = item_submenu or {}
         metadata = {
             "button_text": config_boton["texto"],
-            "submenu": submenu_key,
+            "submenu": config_boton["texto"],
             "label": item_submenu.get("label", ""),
             "path": item_submenu.get("path", []),
             "image": item_submenu.get("image"),
             "category_image": item_submenu.get("category_image"),
-            "default_image": item_submenu.get("default_image") or submenu_config.get("default_image")
+            "default_image": item_submenu.get("default_image")
         }
 
         if self.enviar(config_boton["texto"], quick_reply_submenu=metadata):

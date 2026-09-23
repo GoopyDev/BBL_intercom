@@ -93,7 +93,7 @@ class QuickReplyImagePopup(ctk.CTkToplevel):
             if not image_name:
                 continue
 
-            path = resource_path(os.path.join("res", image_name))
+            path = image_name if os.path.isabs(image_name) else resource_path(os.path.join("res", image_name))
             if not os.path.exists(path):
                 continue
 
