@@ -1,21 +1,26 @@
 import os
+import tkinter as tk
 
-import customtkinter as ctk
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageTk
 
 from utils.resources import resource_path
 
 
-class QuickReplyImagePopup(ctk.CTkToplevel):
+CHROMA_KEY = "#00FF00"
+
+
+class QuickReplyImagePopup(tk.Toplevel):
     """Popup independiente para imagenes especificas de submenus."""
 
-    def __init__(self, master, image_options, anchor_window, size=(180, 180), alpha=0.88):
+    def __init__(self, master, image_options, anchor_window, size=(180, 180), alpha=0.88, shared_root=None):
         super().__init__(master)
         self.image_options = image_options or {}
         self.anchor_window = anchor_window
+        self.shared_root = shared_root
         self.size = size
         self.popup_image = None
         self.popup_pil_image = None
+        self.tk_img = None
         self._closing = False
         self._close_after_id = None
         self._anchor_configure_callback = self._on_anchor_configure
@@ -23,8 +28,11 @@ class QuickReplyImagePopup(ctk.CTkToplevel):
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self.attributes("-alpha", alpha)
-
-        self.configure(fg_color=("#F8FAFC", "#111827"))
+        self.configure(bg=CHROMA_KEY)
+        try:
+            self.wm_attributes("-transparentcolor", CHROMA_KEY)
+        except tk.TclError:
+            pass
         self._bind_to_anchor()
         self._position()
         self._build()
@@ -79,11 +87,13 @@ class QuickReplyImagePopup(ctk.CTkToplevel):
             self.destroy()
             return
 
-        label = ctk.CTkLabel(
+        self.tk_img = self.popup_image
+        label = tk.Label(
             self,
-            text="",
             image=self.popup_image,
-            fg_color=("#F8FAFC", "#111827")
+            bg=CHROMA_KEY,
+            bd=0,
+            highlightthickness=0
         )
         label.pack(fill="both", expand=True)
 
@@ -93,23 +103,39 @@ class QuickReplyImagePopup(ctk.CTkToplevel):
             if not image_name:
                 continue
 
-            path = image_name if os.path.isabs(image_name) else resource_path(os.path.join("res", image_name))
+            path = self._resolve_image_path(image_name)
             if not os.path.exists(path):
                 continue
 
             try:
-                image = Image.open(path)
-                image = ImageOps.contain(image.convert("RGBA"), self.size, method=Image.Resampling.LANCZOS)
+                with Image.open(resource_path(path)) as source:
+                    image = ImageOps.contain(
+                        source.convert("RGBA"),
+                        self.size,
+                        method=Image.Resampling.LANCZOS
+                    )
+                alpha_channel = image.getchannel("A")
+                image.putalpha(alpha_channel.point(lambda pixel: 255 if pixel > 128 else 0))
                 self.popup_pil_image = image
-                return ctk.CTkImage(
-                    light_image=image,
-                    dark_image=image,
-                    size=self.size
-                )
+                return ImageTk.PhotoImage(image, master=self)
             except Exception as e:
                 print(f"Error cargando imagen de submenu '{image_name}': {e}")
 
         return None
+
+    def _resolve_image_path(self, image_name):
+        if self.shared_root and not os.path.isabs(image_name):
+            return os.path.join(self.shared_root, image_name.replace("/", os.sep))
+
+        if os.path.isabs(image_name) and self.shared_root:
+            marker = f"{os.sep}Categories{os.sep}"
+            normalized = os.path.normpath(image_name)
+            marker_index = normalized.lower().find(marker.lower())
+            if marker_index >= 0:
+                relative_path = normalized[marker_index + len(marker):]
+                return os.path.join(self.shared_root, "Categories", relative_path)
+
+        return image_name if os.path.isabs(image_name) else resource_path(os.path.join("res", image_name))
 
     def close_animation(self):
         if self._closing:

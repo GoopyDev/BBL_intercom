@@ -1,7 +1,7 @@
 import ctypes
 
 import customtkinter as ctk
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageTk
 
 from utils.resources import resource_path
 
@@ -272,6 +272,9 @@ class QuickReplySplitButton(ctk.CTkButton):
     def _build_native_menu(self, parent_menu, items, level, category_image):
         import tkinter as tk
 
+        if not hasattr(parent_menu, "_menu_images"):
+            parent_menu._menu_images = []
+
         appearance = ctk.get_appearance_mode().lower()
         bg_color = "#2B2B2B" if appearance == "dark" else "#F8FAFC"
         fg_color = "#F8FAFC" if appearance == "dark" else "#111827"
@@ -285,6 +288,10 @@ class QuickReplySplitButton(ctk.CTkButton):
 
             children = item.get("items") if isinstance(item.get("items"), list) else []
             next_cat_img = item.get("category_image") or item.get("image") or category_image
+            icon_tk = self._load_menu_icon(
+                parent_menu,
+                item.get("image") or item.get("category_image") or category_image
+            )
 
             if children:
                 # Es una categoría / submenú
@@ -300,7 +307,12 @@ class QuickReplySplitButton(ctk.CTkButton):
                     font=("Arial", 10)
                 )
                 self._build_native_menu(submenu, children, level + 1, next_cat_img)
-                parent_menu.add_cascade(label=label, menu=submenu)
+                parent_menu.add_cascade(
+                    label=label,
+                    menu=submenu,
+                    image=icon_tk,
+                    compound="left"
+                )
             else:
                 # Es una opción seleccionable
                 payload = {
@@ -312,8 +324,24 @@ class QuickReplySplitButton(ctk.CTkButton):
                 }
                 parent_menu.add_command(
                     label=label,
-                    command=lambda p=payload: self.submenu_command(p)
+                    command=lambda p=payload: self.submenu_command(p),
+                    image=icon_tk,
+                    compound="left"
                 )
+
+    def _load_menu_icon(self, parent_menu, image_path):
+        if not image_path:
+            return None
+
+        try:
+            with Image.open(resource_path(image_path)) as image:
+                thumbnail = image.convert("RGBA").resize((22, 22), Image.Resampling.LANCZOS)
+            icon_tk = ImageTk.PhotoImage(thumbnail, master=parent_menu)
+            parent_menu._menu_images.append(icon_tk)
+            return icon_tk
+        except Exception as e:
+            print(f"[ERROR] No se pudo cargar miniatura del menú '{image_path}': {e}")
+            return None
 
     def _bind_outside_click(self):
         if self.menu_popup is None or self._outside_click_binding_id is not None:

@@ -1297,14 +1297,29 @@ class ITMessenger(ctk.CTk):
             "submenu": config_boton["texto"],
             "label": item_submenu.get("label", ""),
             "path": item_submenu.get("path", []),
-            "image": item_submenu.get("image"),
-            "category_image": item_submenu.get("category_image"),
-            "default_image": item_submenu.get("default_image")
+            "image": self._ruta_imagen_mensaje(item_submenu.get("image")),
+            "category_image": self._ruta_imagen_mensaje(item_submenu.get("category_image")),
+            "default_image": self._ruta_imagen_mensaje(item_submenu.get("default_image"))
         }
 
         if self.enviar(config_boton["texto"], quick_reply_submenu=metadata):
             detalle = metadata["label"] or config_boton["texto"]
             self.mostrar_confirmacion_envio(f"Mensaje enviado: {config_boton['texto']} - {detalle}")
+
+    def _ruta_imagen_mensaje(self, ruta):
+        """Convierte una imagen local en una ruta portable dentro de la carpeta compartida."""
+        if not ruta or not self.ruta_teams:
+            return ruta
+
+        try:
+            ruta_relativa = os.path.relpath(ruta, self.ruta_teams)
+        except (OSError, ValueError):
+            return ruta
+
+        if ruta_relativa == os.pardir or ruta_relativa.startswith(os.pardir + os.sep):
+            return ruta
+
+        return ruta_relativa.replace(os.sep, "/")
 
     def mostrar_confirmacion_envio(self, texto):
         """Muestra una barra flotante temporal confirmando el mensaje enviado."""
@@ -1546,7 +1561,8 @@ class ITMessenger(ctk.CTk):
                 remitente,
                 contenido,
                 on_reply=self.enviar_respuesta,
-                available_destinations=self.obtener_destinos_registrados()
+                available_destinations=self.obtener_destinos_registrados(),
+                shared_root=self.ruta_teams
             )
         )
 

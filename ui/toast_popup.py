@@ -80,13 +80,14 @@ class ToastPopup(ctk.CTkToplevel):
     ultima_posicion = None
     contador_posicion = 0
 
-    def __init__(self, master, remitente, mensaje, on_reply=None, available_destinations=None):
+    def __init__(self, master, remitente, mensaje, on_reply=None, available_destinations=None, shared_root=None):
         super().__init__(master)
 
         self.mensaje_data = self._normalizar_mensaje(remitente, mensaje)
         self.mensaje_texto = self.mensaje_data["text"]
         self.remitente = self.mensaje_data["from_alias"] or remitente
         self.on_reply = on_reply
+        self.shared_root = shared_root
         self.es_mensaje_rapido = self.mensaje_texto in MENSAJES_RAPIDOS and not self.mensaje_data.get("reply_to")
         self.quick_reply_submenu = self.mensaje_data.get("quick_reply_submenu")
         self.destinatarios = self.mensaje_data.get("to") or []
@@ -266,7 +267,8 @@ class ToastPopup(ctk.CTkToplevel):
             self.quick_reply_image_popup = QuickReplyImagePopup(
                 self.master,
                 self.quick_reply_submenu,
-                self
+                self,
+                shared_root=self.shared_root
             )
         except Exception as e:
             print(f"Error mostrando imagen de submenu: {e}")
