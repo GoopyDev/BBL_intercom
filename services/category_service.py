@@ -1,14 +1,28 @@
 import os
+import re
 
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif"}
+
+
+def es_imagen_completa(nombre_archivo):
+    """Indica si el nombre de imagen contiene una etiqueta de visualizacion completa."""
+    nombre = os.path.basename(nombre_archivo or "").casefold()
+    return "[full]" in nombre or "[sa]" in nombre
+
+
+def mostrar_label_imagen(nombre_archivo):
+    """Indica si el nombre de imagen no contiene la etiqueta NOLABEL."""
+    nombre = os.path.basename(nombre_archivo or "").casefold()
+    return "[nolabel]" not in nombre
 
 
 def formatear_nombre_categoria(nombre, es_archivo=False):
     """Convierte nombres de archivos y carpetas en etiquetas legibles."""
     if es_archivo:
         nombre = os.path.splitext(nombre)[0]
-    return nombre.replace("_", " ").strip()
+    nombre = re.sub(r"\[[^\]]*\]", "", nombre)
+    return " ".join(nombre.replace("_", " ").split())
 
 
 def _primer_archivo_imagen(items):
@@ -36,6 +50,9 @@ def _cargar_items(ruta):
                 "label": formatear_nombre_categoria(entrada.name, es_archivo=True),
                 "image": os.path.abspath(entrada.path),
                 "category_image": os.path.abspath(entrada.path),
+                "is_full_image": es_imagen_completa(entrada.name),
+                "is_full": es_imagen_completa(entrada.name),
+                "show_label": mostrar_label_imagen(entrada.name),
                 "items": []
             })
         elif entrada.is_dir():

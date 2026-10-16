@@ -3,6 +3,8 @@ import json
 import os
 import uuid
 
+from services.category_service import es_imagen_completa, mostrar_label_imagen
+
 
 CARPETAS_RESERVADAS = {"Themes", "Categories"}
 
@@ -49,7 +51,22 @@ def crear_payload_mensaje(hostname, alias, texto, destinatarios=None, respuesta_
         }
 
     if isinstance(quick_reply_submenu, dict):
+        image_path = quick_reply_submenu.get("image")
         payload["quick_reply_submenu"] = quick_reply_submenu
+        payload["is_full"] = (
+            quick_reply_submenu.get("is_full") is True
+            or quick_reply_submenu.get("is_full_image") is True
+            or es_imagen_completa(image_path)
+        )
+        payload["is_full_image"] = payload["is_full"]
+        payload["show_label"] = (
+            quick_reply_submenu.get("show_label") is not False
+            and mostrar_label_imagen(image_path)
+        )
+    else:
+        payload["is_full"] = False
+        payload["is_full_image"] = False
+        payload["show_label"] = True
 
     return payload
 
@@ -70,12 +87,43 @@ def parsear_mensaje(remitente_archivo, contenido):
             "text": contenido,
             "to": [],
             "created_at": None,
-            "reply_to": None
+            "reply_to": None,
+            "quick_reply_submenu": None,
+            "is_full": False,
+            "is_full_image": False,
+            "show_label": True
         }
 
     texto = data.get("text")
     if not isinstance(texto, str):
         texto = str(texto)
+
+    quick_reply_submenu = (
+        data.get("quick_reply_submenu")
+        if isinstance(data.get("quick_reply_submenu"), dict)
+        else None
+    )
+    image_path = quick_reply_submenu.get("image") if quick_reply_submenu else None
+    is_full = (
+        data.get("is_full") is True
+        or data.get("is_full_image") is True
+        or (
+            isinstance(quick_reply_submenu, dict)
+            and (
+                quick_reply_submenu.get("is_full") is True
+                or quick_reply_submenu.get("is_full_image") is True
+            )
+        )
+        or es_imagen_completa(image_path)
+    )
+    show_label = (
+        data.get("show_label") is not False
+        and (
+            not isinstance(quick_reply_submenu, dict)
+            or quick_reply_submenu.get("show_label") is not False
+        )
+        and mostrar_label_imagen(image_path)
+    )
 
     return {
         "version": data.get("version", 1),
@@ -86,7 +134,10 @@ def parsear_mensaje(remitente_archivo, contenido):
         "to": data.get("to") if isinstance(data.get("to"), list) else [],
         "created_at": data.get("created_at"),
         "reply_to": data.get("reply_to") if isinstance(data.get("reply_to"), dict) else None,
-        "quick_reply_submenu": data.get("quick_reply_submenu") if isinstance(data.get("quick_reply_submenu"), dict) else None
+        "quick_reply_submenu": quick_reply_submenu,
+        "is_full": is_full,
+        "is_full_image": is_full,
+        "show_label": show_label
     }
 
 

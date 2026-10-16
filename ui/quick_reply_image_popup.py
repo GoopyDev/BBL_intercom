@@ -9,6 +9,30 @@ from utils.resources import resource_path
 CHROMA_KEY = "#00FF00"
 
 
+def apply_chroma_transparency(image):
+    alpha_channel = image.getchannel("A")
+    image.putalpha(alpha_channel.point(lambda pixel: 255 if pixel > 128 else 0))
+    return image
+
+
+def resolve_quick_reply_image_path(image_name, shared_root=None):
+    if not image_name:
+        return ""
+
+    if shared_root and not os.path.isabs(image_name):
+        return os.path.join(shared_root, image_name.replace("/", os.sep))
+
+    if os.path.isabs(image_name) and shared_root:
+        marker = f"{os.sep}Categories{os.sep}"
+        normalized = os.path.normpath(image_name)
+        marker_index = normalized.lower().find(marker.lower())
+        if marker_index >= 0:
+            relative_path = normalized[marker_index + len(marker):]
+            return os.path.join(shared_root, "Categories", relative_path)
+
+    return image_name if os.path.isabs(image_name) else resource_path(os.path.join("res", image_name))
+
+
 class QuickReplyImagePopup(tk.Toplevel):
     """Popup independiente para imagenes especificas de submenus."""
 
@@ -114,8 +138,7 @@ class QuickReplyImagePopup(tk.Toplevel):
                         self.size,
                         method=Image.Resampling.LANCZOS
                     )
-                alpha_channel = image.getchannel("A")
-                image.putalpha(alpha_channel.point(lambda pixel: 255 if pixel > 128 else 0))
+                apply_chroma_transparency(image)
                 self.popup_pil_image = image
                 return ImageTk.PhotoImage(image, master=self)
             except Exception as e:
@@ -124,18 +147,7 @@ class QuickReplyImagePopup(tk.Toplevel):
         return None
 
     def _resolve_image_path(self, image_name):
-        if self.shared_root and not os.path.isabs(image_name):
-            return os.path.join(self.shared_root, image_name.replace("/", os.sep))
-
-        if os.path.isabs(image_name) and self.shared_root:
-            marker = f"{os.sep}Categories{os.sep}"
-            normalized = os.path.normpath(image_name)
-            marker_index = normalized.lower().find(marker.lower())
-            if marker_index >= 0:
-                relative_path = normalized[marker_index + len(marker):]
-                return os.path.join(self.shared_root, "Categories", relative_path)
-
-        return image_name if os.path.isabs(image_name) else resource_path(os.path.join("res", image_name))
+        return resolve_quick_reply_image_path(image_name, self.shared_root)
 
     def close_animation(self):
         if self._closing:

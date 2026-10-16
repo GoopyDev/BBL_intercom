@@ -1,14 +1,25 @@
 import datetime
 import os
 import tkinter as tk
+import tkinter.font as tkfont
 
 import customtkinter as ctk
 import time
-from PIL import Image, ImageEnhance, ImageOps
+from PIL import Image, ImageEnhance, ImageOps, ImageTk
 
 from config.constants import BOTONES_PRESET, FONDOS_POPUP
+from services.category_service import (
+    es_imagen_completa,
+    formatear_nombre_categoria,
+    mostrar_label_imagen,
+)
 from utils.resources import resource_path
-from ui.quick_reply_image_popup import QuickReplyImagePopup
+from ui.quick_reply_image_popup import (
+    CHROMA_KEY,
+    QuickReplyImagePopup,
+    apply_chroma_transparency,
+    resolve_quick_reply_image_path,
+)
 from ui.coin_jump_animation import (
     AnimacionSaltoMoneda,
     IndicadorRecargaSalto,
@@ -38,6 +49,16 @@ MARGEN_POPUP_X = 18
 ANCHO_NOTIFICACION = 360    # Ancho total del toast notification
 ALTO_NOTIFICACION = 220  # Alto base del toast notification
 
+# CONFIGURACIÓN DE NOTIFICACIONES "FULL" Y CON "LABEL" (EPÍGRAFE)
+FULL_IMAGE_CAPTION_GAP = 20
+FULL_IMAGE_CAPTION_CHROMA_KEY = "#777777"
+FULL_IMAGE_CAPTION_BACKGROUND = "#505050"
+FULL_IMAGE_CAPTION_FOREGROUND = "#FFFFFF"
+FULL_IMAGE_CAPTION_CORNER_RADIUS = 9
+FULL_IMAGE_CAPTION_PADDING_X = 12
+FULL_IMAGE_CAPTION_PADDING_Y = 3
+FULL_IMAGE_CAPTION_FONT = ("Segoe UI", 20, "bold")
+
 ANCHO_CONTENIDO_POPUP = 320
 
 # RESPUESTAS
@@ -56,6 +77,320 @@ ANCHO_BOTON_COPIAR = 34
 ALTO_BOTON_COPIAR = 30
 ICONO_COPIAR = "📋"
 ICONO_COPIADO = "✓"
+
+
+def mensaje_es_imagen_completa(mensaje):
+    if not isinstance(mensaje, dict):
+        return False
+
+    submenu = mensaje.get("quick_reply_submenu")
+    return (
+        mensaje.get("is_full") is True
+        or mensaje.get("is_full_image") is True
+        or (
+            isinstance(submenu, dict)
+            and (
+                submenu.get("is_full") is True
+                or submenu.get("is_full_image") is True
+                or es_imagen_completa(submenu.get("image"))
+            )
+        )
+    )
+
+
+def mensaje_muestra_label(mensaje):
+    if not isinstance(mensaje, dict):
+        return True
+
+    submenu = mensaje.get("quick_reply_submenu")
+    return (
+        mensaje.get("show_label") is not False
+        and not (
+            isinstance(submenu, dict)
+            and (
+                submenu.get("show_label") is False
+                or not mostrar_label_imagen(submenu.get("image"))
+            )
+        )
+    )
+
+
+def cargar_frames_imagen_completa(image_path, size):
+    frames = []
+    with Image.open(image_path) as source:
+        frame_count = max(1, getattr(source, "n_frames", 1))
+        is_animated = getattr(source, "is_animated", False) or frame_count > 1
+        frame_count = frame_count if is_animated else 1
+
+        for frame_index in range(frame_count):
+            source.seek(frame_index)
+            duration = max(1, int(source.info.get("duration", 100)))
+            frame = source.convert("RGBA").copy()
+            frame = frame.resize(size, Image.Resampling.LANCZOS)
+            apply_chroma_transparency(frame)
+            frames.append((frame, duration))
+
+    return frames
+
+
+class FullImageToast(tk.Toplevel):
+    """Toast independiente nativo para imagenes transparentes de pantalla completa."""
+    _position_offset = 0
+
+    def __init__(self, master, mensaje, shared_root=None):
+        super().__init__(master)
+        self.shared_root = shared_root
+        self.frames = []
+        self.tk_frames = []
+        self.frame_index = 0
+        self._frame_after_id = None
+        self._drag_origin = None
+        self.caption_popup = None
+        self.show_label = mensaje_muestra_label(mensaje)
+
+        submenu = mensaje.get("quick_reply_submenu")
+        if not isinstance(submenu, dict):
+            submenu = {}
+        caption = submenu.get("label")
+        if not caption:
+            caption = os.path.basename(submenu.get("image") or "")
+            self.caption_text = formatear_nombre_categoria(caption, es_archivo=True)
+        else:
+            self.caption_text = formatear_nombre_categoria(caption)
+        image_path = resolve_quick_reply_image_path(submenu.get("image"), shared_root)
+        try:
+            with Image.open(image_path) as source:
+                image_width, image_height = source.size
+            self.image_height = ALTO_NOTIFICACION
+            self.width = max(1, round(self.image_height * image_width / image_height))
+            self.frames = cargar_frames_imagen_completa(
+                image_path,
+                (self.width, self.image_height)
+            )
+        except (EOFError, OSError, TypeError, ValueError) as e:
+            print(f"[ERROR] No se pudo cargar la imagen completa '{image_path}': {e}")
+            self.destroy()
+            return
+
+        self.height = self.image_height
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.configure(bg=CHROMA_KEY)
+        try:
+            self.wm_attributes("-transparentcolor", CHROMA_KEY)
+        except tk.TclError as e:
+            print(f"[ERROR] No se pudo habilitar transparencia para el toast: {e}")
+
+        self.tk_frames = [
+            (ImageTk.PhotoImage(frame, master=self), duration)
+            for frame, duration in self.frames
+        ]
+        self.image_label = tk.Label(
+            self,
+            image=self.tk_frames[0][0],
+            bg=CHROMA_KEY,
+            bd=0,
+            highlightthickness=0
+        )
+        self.image_label.place(x=0, y=0, width=self.width, height=self.image_height)
+        self.close_control = tk.Canvas(
+            self,
+            width=28,
+            height=28,
+            bg=CHROMA_KEY,
+            bd=0,
+            highlightthickness=0,
+            cursor="hand2"
+        )
+        self.close_control.place(x=self.width - 32, y=4)
+        self.close_circle = self.close_control.create_oval(
+            4,
+            4,
+            24,
+            24,
+            fill="#263238",
+            outline="#FFFFFF",
+            width=1
+        )
+        self.close_cross = (
+            self.close_control.create_line(10, 10, 18, 18, fill="#FFFFFF", width=2),
+            self.close_control.create_line(18, 10, 10, 18, fill="#FFFFFF", width=2)
+        )
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        offset = FullImageToast._position_offset
+        FullImageToast._position_offset = (offset + DESPLAZAMIENTO_POPUP) % (
+            POPUPS_ANTES_DE_REINICIAR_POSICION * DESPLAZAMIENTO_POPUP
+        )
+        x = screen_width - self.width - 20 - offset
+        y = screen_height - self.height - 60 - offset
+        self.geometry(f"{self.width}x{self.height}+{x}+{y}")
+        for widget in (self, self.image_label):
+            widget.bind("<ButtonPress-1>", self._start_drag)
+            widget.bind("<B1-Motion>", self._drag)
+            widget.bind("<ButtonRelease-1>", self._end_drag)
+            widget.bind("<ButtonPress-2>", self.close_animation)
+            widget.bind("<Double-Button-1>", self.close_animation)
+        self.close_control.bind("<Button-1>", self._on_close_control_click)
+        self.close_control.bind("<ButtonPress-2>", self.close_animation)
+        self.close_control.bind("<Double-Button-1>", self.close_animation)
+        self.close_control.bind("<Enter>", self._on_close_control_enter)
+        self.close_control.bind("<Leave>", self._on_close_control_leave)
+        if self.show_label and self.caption_text:
+            self._create_caption_popup()
+        if len(self.tk_frames) > 1:
+            self._schedule_next_frame()
+
+    def _schedule_next_frame(self):
+        if self._frame_after_id is not None or not self.winfo_exists():
+            return
+        _, duration = self.tk_frames[self.frame_index]
+        self._frame_after_id = self.after(duration, self._update_frame)
+
+    def _update_frame(self):
+        self._frame_after_id = None
+        if not self.winfo_exists() or not self.tk_frames:
+            return
+        self.frame_index = (self.frame_index + 1) % len(self.tk_frames)
+        self.image_label.configure(image=self.tk_frames[self.frame_index][0])
+        self._schedule_next_frame()
+
+    def _create_caption_popup(self):
+        font = tkfont.Font(root=self, font=FULL_IMAGE_CAPTION_FONT)
+        width = font.measure(self.caption_text) + FULL_IMAGE_CAPTION_PADDING_X * 2
+        height = font.metrics("linespace") + FULL_IMAGE_CAPTION_PADDING_Y * 2
+        radius = min(FULL_IMAGE_CAPTION_CORNER_RADIUS, height // 2, width // 2)
+
+        self.caption_popup = tk.Toplevel(self)
+        self.caption_popup.overrideredirect(True)
+        self.caption_popup.attributes("-topmost", True)
+        self.caption_popup.configure(bg=FULL_IMAGE_CAPTION_CHROMA_KEY)
+        try:
+            self.caption_popup.wm_attributes(
+                "-transparentcolor",
+                FULL_IMAGE_CAPTION_CHROMA_KEY
+            )
+        except tk.TclError as e:
+            print(f"[ERROR] No se pudo habilitar transparencia del epigrafe: {e}")
+        self.caption_popup.geometry(f"{width}x{height}")
+
+        canvas = tk.Canvas(
+            self.caption_popup,
+            width=width,
+            height=height,
+            bg=FULL_IMAGE_CAPTION_CHROMA_KEY,
+            bd=0,
+            highlightthickness=0
+        )
+        canvas.pack(fill="both", expand=True)
+        self._draw_rounded_caption_background(canvas, width, height, radius)
+        canvas.create_text(
+            width // 2,
+            height // 2,
+            text=self.caption_text,
+            fill=FULL_IMAGE_CAPTION_FOREGROUND,
+            font=FULL_IMAGE_CAPTION_FONT,
+            anchor="center"
+        )
+
+        for widget in (self.caption_popup, canvas):
+            widget.bind("<ButtonPress-1>", self._start_drag)
+            widget.bind("<B1-Motion>", self._drag)
+            widget.bind("<ButtonRelease-1>", self._end_drag)
+            widget.bind("<ButtonPress-2>", self.close_animation)
+            widget.bind("<Double-Button-1>", self.close_animation)
+        self._position_caption_popup()
+
+    def _draw_rounded_caption_background(self, canvas, width, height, radius):
+        color = FULL_IMAGE_CAPTION_BACKGROUND
+        canvas.create_rectangle(radius, 0, width - radius, height, fill=color, outline=color)
+        canvas.create_rectangle(0, radius, width, height - radius, fill=color, outline=color)
+        for x, y, start in (
+            (0, 0, 90),
+            (width - 2 * radius, 0, 0),
+            (width - 2 * radius, height - 2 * radius, 270),
+            (0, height - 2 * radius, 180)
+        ):
+            canvas.create_arc(
+                x,
+                y,
+                x + 2 * radius,
+                y + 2 * radius,
+                start=start,
+                extent=90,
+                fill=color,
+                outline=color
+            )
+
+    def _position_caption_popup(self):
+        if self.caption_popup is None:
+            return
+        caption_width = self.caption_popup.winfo_reqwidth()
+        x = self.winfo_x() + (self.width - caption_width) // 2
+        y = self.winfo_y() + self.image_height + FULL_IMAGE_CAPTION_GAP
+        self.caption_popup.geometry(f"+{x}+{y}")
+
+    def _start_drag(self, event):
+        self._drag_origin = (
+            event.x_root,
+            event.y_root,
+            self.winfo_x(),
+            self.winfo_y()
+        )
+
+    def _drag(self, event):
+        if self._drag_origin is None:
+            return
+        start_x, start_y, window_x, window_y = self._drag_origin
+        x = window_x + event.x_root - start_x
+        y = window_y + event.y_root - start_y
+        self.geometry(f"{self.width}x{self.height}+{x}+{y}")
+        self._position_caption_popup()
+
+    def _end_drag(self, event):
+        self._drag_origin = None
+
+    def _on_close_control_click(self, event):
+        self.close_animation()
+        return "break"
+
+    def _on_close_control_enter(self, event):
+        self.close_control.itemconfigure(self.close_circle, fill="#D33")
+
+    def _on_close_control_leave(self, event):
+        self.close_control.itemconfigure(self.close_circle, fill="#263238")
+
+    def close_animation(self, event=None):
+        self.destroy()
+
+    def destroy(self):
+        if self._frame_after_id is not None:
+            try:
+                self.after_cancel(self._frame_after_id)
+            except tk.TclError:
+                pass
+            self._frame_after_id = None
+        try:
+            if self.caption_popup is not None and self.caption_popup.winfo_exists():
+                self.caption_popup.destroy()
+        except tk.TclError:
+            pass
+        super().destroy()
+
+
+def crear_toast_popup(master, remitente, mensaje, on_reply=None, available_destinations=None, shared_root=None):
+    if mensaje_es_imagen_completa(mensaje):
+        return FullImageToast(master, mensaje, shared_root)
+
+    return ToastPopup(
+        master,
+        remitente,
+        mensaje,
+        on_reply=on_reply,
+        available_destinations=available_destinations,
+        shared_root=shared_root
+    )
+
 
 def obtener_fondo_popup(mensaje):
     """Devuelve el siguiente fondo configurado para el mensaje recibido."""
@@ -216,7 +551,8 @@ class ToastPopup(ctk.CTkToplevel):
 
         if self.bg_label is not None:
             self.bg_label.lift()
-        self.title_label.lift()
+        if getattr(self, "title_label", None) is not None:
+            self.title_label.lift()
         if getattr(self, "destinatarios_label", None) is not None:
             self.destinatarios_label.lift()
         if self.scroll_frame is not None:
@@ -227,16 +563,23 @@ class ToastPopup(ctk.CTkToplevel):
             self.reply_menu_button.lift()
         if self.reply_frame is not None:
             self.reply_frame.lift()
-        self.msg_label.lift()
+        if getattr(self, "msg_label", None) is not None:
+            self.msg_label.lift()
         if getattr(self, "timestamp_label", None) is not None:
             self.timestamp_label.lift()
         self.close_btn.lift()
 
-        self._mostrar_imagen_submenu_si_corresponde()
+        if not self.es_imagen_completa:
+            self._mostrar_imagen_submenu_si_corresponde()
         self.fade_in()
 
     def _normalizar_mensaje(self, remitente, mensaje):
         if isinstance(mensaje, dict):
+            quick_reply_submenu = (
+                mensaje.get("quick_reply_submenu")
+                if isinstance(mensaje.get("quick_reply_submenu"), dict)
+                else None
+            )
             return {
                 "id": mensaje.get("id"),
                 "from_hostname": mensaje.get("from_hostname"),
@@ -245,7 +588,14 @@ class ToastPopup(ctk.CTkToplevel):
                 "to": mensaje.get("to") if isinstance(mensaje.get("to"), list) else [],
                 "created_at": mensaje.get("created_at"),
                 "reply_to": mensaje.get("reply_to") if isinstance(mensaje.get("reply_to"), dict) else None,
-                "quick_reply_submenu": mensaje.get("quick_reply_submenu") if isinstance(mensaje.get("quick_reply_submenu"), dict) else None
+                "quick_reply_submenu": quick_reply_submenu,
+                "is_full_image": (
+                    mensaje.get("is_full_image") is True
+                    or (
+                        isinstance(quick_reply_submenu, dict)
+                        and quick_reply_submenu.get("is_full_image") is True
+                    )
+                )
             }
 
         return {
@@ -256,11 +606,15 @@ class ToastPopup(ctk.CTkToplevel):
             "to": [],
             "created_at": None,
             "reply_to": None,
-            "quick_reply_submenu": None
+            "quick_reply_submenu": None,
+            "is_full_image": False
         }
 
     def _mostrar_imagen_submenu_si_corresponde(self):
-        if not self.es_mensaje_rapido or not isinstance(self.quick_reply_submenu, dict):
+        if (
+            not self.es_mensaje_rapido
+            or not isinstance(self.quick_reply_submenu, dict)
+        ):
             return
 
         try:

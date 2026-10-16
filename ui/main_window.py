@@ -19,7 +19,7 @@ from services.message_service import enviar_mensaje, es_destino_valido, obtener_
 from services.observer_service import detener_observer, iniciar_observer
 from services.history_service import MessageHistory
 from services.profile_service import actualizar_profile_equipo, obtener_alias_equipo
-from ui.toast_popup import ToastPopup
+from ui.toast_popup import crear_toast_popup
 from ui.quick_reply_dropdown import QuickReplySplitButton
 from ui.old_messages_window import OldMessagesWindow
 from ui.tooltip import Tooltip
@@ -1299,7 +1299,13 @@ class ITMessenger(ctk.CTk):
             "path": item_submenu.get("path", []),
             "image": self._ruta_imagen_mensaje(item_submenu.get("image")),
             "category_image": self._ruta_imagen_mensaje(item_submenu.get("category_image")),
-            "default_image": self._ruta_imagen_mensaje(item_submenu.get("default_image"))
+            "default_image": self._ruta_imagen_mensaje(item_submenu.get("default_image")),
+            "is_full_image": item_submenu.get("is_full_image") is True,
+            "is_full": (
+                item_submenu.get("is_full") is True
+                or item_submenu.get("is_full_image") is True
+            ),
+            "show_label": item_submenu.get("show_label") is not False
         }
 
         if self.enviar(config_boton["texto"], quick_reply_submenu=metadata):
@@ -1556,7 +1562,7 @@ class ITMessenger(ctk.CTk):
 
         self.after(
             0,
-            lambda: ToastPopup(
+            lambda: crear_toast_popup(
                 self,
                 remitente,
                 contenido,

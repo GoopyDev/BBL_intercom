@@ -3,6 +3,7 @@ import ctypes
 import customtkinter as ctk
 from PIL import Image, ImageFilter, ImageTk
 
+from services.category_service import es_imagen_completa, mostrar_label_imagen
 from utils.resources import resource_path
 
 MENU_BUTTON_HEIGHT_RATIO = 0.50
@@ -320,6 +321,19 @@ class QuickReplySplitButton(ctk.CTkButton):
                     "image": item.get("image"),
                     "category_image": next_cat_img,
                     "default_image": self.submenu_config.get("default_image"),
+                    "is_full_image": (
+                        item.get("is_full_image") is True
+                        or es_imagen_completa(item.get("image"))
+                    ),
+                    "is_full": (
+                        item.get("is_full") is True
+                        or item.get("is_full_image") is True
+                        or es_imagen_completa(item.get("image"))
+                    ),
+                    "show_label": (
+                        item.get("show_label") is not False
+                        and mostrar_label_imagen(item.get("image"))
+                    ),
                     "path": [label]
                 }
                 parent_menu.add_command(
